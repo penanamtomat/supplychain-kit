@@ -1,0 +1,11 @@
+# policy-strict.yaml — fail on Critical AND High findings.
+# Use this in main branches or pre-release gates.
+#
+# Usage: supplychain-kit gate --findings findings.json --policy configs/policy-strict.yaml
+
+quality_gate:
+  fail_on:
+    - severity: critical
+    - severity: high
+  warn_on:
+    - severity: medium

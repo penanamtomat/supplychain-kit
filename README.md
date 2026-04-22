@@ -248,37 +248,128 @@ supplychain-kit scan --repo . --format json | supplychain-kit gate
 
 ### CI integration (GitHub Actions)
 
+Full workflow — scans on every push and pull request, fails the pipeline on Critical findings:
+
 ```yaml
-- name: Security scan
-  run: supplychain-kit run ${{ github.event.repository.name }}-${{ github.run_id }} --repo . --mode all
+name: Security Scan
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install supplychain-kit
+        run: bash <(curl -fsSL https://raw.githubusercontent.com/penanamtomat/supplychain-kit/main/install.sh)
+
+      - name: Run security scan
+        run: |
+          supplychain-kit run ${{ github.event.repository.name }}-${{ github.run_number }} \
+            --repo . \
+            --mode all \
+            --policy configs/policy-strict.yaml
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-findings
+          path: results/
 ```
 
-The workflow will fail automatically on Critical findings (exit `2`) or warn on High findings (exit `1`). To allow the workflow to continue even on failures:
+Exit codes are handled automatically by GitHub Actions:
+- Exit `0` → pipeline passes
+- Exit `1` → pipeline fails (warn policy triggered)
+- Exit `2` → pipeline fails (Critical found)
+
+To scan without blocking the pipeline (report only):
 
 ```yaml
-- name: Security scan
-  run: supplychain-kit run myapp --repo . --mode sca
-  continue-on-error: true
+      - name: Security scan (non-blocking)
+        run: supplychain-kit run myapp --repo . --mode sca
+        continue-on-error: true
+```
+
+Two-step variant — scan then gate separately (useful for uploading artifacts before gating):
+
+```yaml
+      - name: Scan
+        run: supplychain-kit scan --repo . --format json --out findings.json
+
+      - name: Upload findings
+        uses: actions/upload-artifact@v4
+        with:
+          name: findings
+          path: findings.json
+
+      - name: Quality gate
+        run: supplychain-kit gate --findings findings.json --policy configs/policy-strict.yaml
+```
+
+---
+
+### CI integration (GitLab CI)
+
+```yaml
+security-scan:
+  stage: test
+  image: ubuntu:22.04
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl git
+    - bash <(curl -fsSL https://raw.githubusercontent.com/penanamtomat/supplychain-kit/main/install.sh)
+    - export PATH="$PATH:$HOME/.local/bin"
+  script:
+    - supplychain-kit run $CI_PROJECT_NAME-$CI_PIPELINE_ID --repo . --mode all
+  artifacts:
+    when: always
+    paths:
+      - results/
+    expire_in: 30 days
+  allow_failure: false
+```
+
+Non-blocking variant (report only, pipeline never fails):
+
+```yaml
+security-scan:
+  script:
+    - supplychain-kit run $CI_PROJECT_NAME-$CI_PIPELINE_ID --repo . --mode all
+  allow_failure: true
 ```
 
 ---
 
 ### Policy configuration
 
-The default policy warns on High and fails on Critical. Override with a custom file:
+Three ready-made policies are included in `configs/`:
+
+| File | Behaviour | Use case |
+|---|---|---|
+| `policy-strict.yaml` | Fail on Critical **and** High | `main` branch, pre-release gate |
+| `policy-moderate.yaml` | Fail on Critical, warn on High | Feature branches (default) |
+| `policy-permissive.yaml` | Warn only, never fail | Onboarding, legacy repos |
 
 ```bash
-supplychain-kit run myapp --repo . --policy configs/aspm.yaml
+# Use a specific policy
+supplychain-kit gate --findings findings.json --policy configs/policy-strict.yaml
+
+# Pipe scan output directly into gate (no intermediate file)
+supplychain-kit scan --repo . --format json | supplychain-kit gate --policy configs/policy-moderate.yaml
 ```
 
-Policy file format (`configs/aspm.yaml`):
+Custom policy format:
 
 ```yaml
 quality_gate:
   fail_on:
     - severity: critical
     - severity: high
-      max_count: 0   # zero tolerance for High
+      max_count: 0   # zero tolerance
   warn_on:
     - severity: medium
 ```

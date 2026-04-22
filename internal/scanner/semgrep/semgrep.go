@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -44,7 +45,13 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 		return out, err
 	}
 
-	cmd := exec.CommandContext(ctx, a.binary, "--config", a.config, "--json", "--quiet", req.CheckoutDir)
+	cmd := exec.CommandContext(ctx, a.binary,
+		"--config", a.config,
+		"--json", "--quiet",
+		"--exclude", "vendor",
+		"--exclude", "node_modules",
+		"--exclude", ".git",
+		req.CheckoutDir)
 	cmd.Stderr = os.Stderr
 	stdout, err := cmd.Output()
 	if err != nil {
@@ -72,6 +79,10 @@ func ParseReport(raw []byte, assetID, scanRunID, checkoutDir string) ([]*models.
 	now := time.Now().UTC()
 	out := make([]*models.Finding, 0, len(report.Results))
 	for _, r := range report.Results {
+		rel := relPath(checkoutDir, r.Path)
+		if isVendorPath(rel) {
+			continue
+		}
 		f := &models.Finding{
 			ID:           uuid.NewString(),
 			AssetID:      assetID,
@@ -81,8 +92,9 @@ func ParseReport(raw []byte, assetID, scanRunID, checkoutDir string) ([]*models.
 			Title:        firstLine(r.Extra.Message),
 			Description:  r.Extra.Message,
 			Severity:     mapSeverity(r.Extra.Severity),
-			FilePath:     relPath(checkoutDir, r.Path),
+			FilePath:     rel,
 			Line:         r.Start.Line,
+			AdvisoryURL:  semgrepRuleURL(r.CheckID),
 			Reachability: models.ReachUnknown,
 			FirstSeen:    now,
 			LastSeen:     now,
@@ -112,6 +124,8 @@ type semgrepReport struct {
 
 func mapSeverity(s string) models.Severity {
 	switch strings.ToUpper(s) {
+	case "CRITICAL":
+		return models.SeverityCritical
 	case "ERROR":
 		return models.SeverityHigh
 	case "WARNING":
@@ -123,10 +137,32 @@ func mapSeverity(s string) models.Severity {
 }
 
 func relPath(base, abs string) string {
+	if rel, err := filepath.Rel(base, abs); err == nil {
+		return filepath.ToSlash(rel)
+	}
 	if strings.HasPrefix(abs, base) {
 		return strings.TrimPrefix(strings.TrimPrefix(abs, base), "/")
 	}
 	return abs
+}
+
+// isVendorPath returns true for paths inside vendor/, node_modules/, or .git/.
+func isVendorPath(p string) bool {
+	for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
+		switch seg {
+		case "vendor", "node_modules", ".git":
+			return true
+		}
+	}
+	return false
+}
+
+// semgrepRuleURL returns the semgrep registry URL for a rule ID.
+func semgrepRuleURL(checkID string) string {
+	if checkID == "" {
+		return ""
+	}
+	return "https://semgrep.dev/r/" + checkID
 }
 
 func firstLine(s string) string {

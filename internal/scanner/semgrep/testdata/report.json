@@ -17,6 +17,24 @@
         "message": "Detected unescaped user input used in URL. This could lead to open redirect.",
         "severity": "WARNING"
       }
+    },
+    {
+      "check_id": "go.lang.security.audit.crypto.insecure-hash.insecure-hash",
+      "path": "internal/auth/token.go",
+      "start": { "line": 17, "col": 2 },
+      "extra": {
+        "message": "Use of broken MD5 hash function. Upgrade to SHA-256 or higher.",
+        "severity": "CRITICAL"
+      }
+    },
+    {
+      "check_id": "go.lang.security.audit.dangerous-exec-command.dangerous-exec-command",
+      "path": "vendor/github.com/some/pkg/exec.go",
+      "start": { "line": 5, "col": 1 },
+      "extra": {
+        "message": "Finding inside vendor/ — must be filtered out.",
+        "severity": "ERROR"
+      }
     }
   ],
   "errors": []

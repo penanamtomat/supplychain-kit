@@ -1,0 +1,12 @@
+# policy-moderate.yaml — fail on Critical only, warn on High.
+# Default policy applied when no --policy flag is given.
+# Suitable for feature branches and development environments.
+#
+# Usage: supplychain-kit gate --findings findings.json --policy configs/policy-moderate.yaml
+
+quality_gate:
+  fail_on:
+    - severity: critical
+  warn_on:
+    - severity: high
+    - severity: medium

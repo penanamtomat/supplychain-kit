@@ -135,6 +135,7 @@ type Finding struct {
 	Package       string           `json:"package,omitempty"`
 	Version       string           `json:"version,omitempty"`
 	FixedVersion  string           `json:"fixed_version,omitempty"`
+	AdvisoryURL   string           `json:"advisory_url,omitempty"`
 	Reachability  Reachability     `json:"reachability"`
 	RiskScore     float64          `json:"risk_score"`
 	VEXStatus     VEXStatus        `json:"vex_status,omitempty"`

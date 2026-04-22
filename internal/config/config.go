@@ -78,6 +78,15 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("remediation.base_url", "http://localhost:9090")
 	v.SetDefault("remediation.llm_provider", "anthropic")
 
+	// Default quality gate: fail on any Critical, warn on any High.
+	// These are overridden by quality_gate entries in the config file.
+	v.SetDefault("quality_gate.fail_on", []map[string]interface{}{
+		{"severity": "critical"},
+	})
+	v.SetDefault("quality_gate.warn_on", []map[string]interface{}{
+		{"severity": "high"},
+	})
+
 	if path != "" {
 		v.SetConfigFile(path)
 	} else {

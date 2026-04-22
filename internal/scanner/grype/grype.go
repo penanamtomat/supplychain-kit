@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -85,6 +86,7 @@ func ParseReport(raw []byte, assetID, scanRunID string) ([]*models.Finding, erro
 			Package:      m.Artifact.Name,
 			Version:      m.Artifact.Version,
 			FixedVersion: pickFixVersion(m.Vulnerability.Fix),
+			AdvisoryURL:  advisoryURL(m.Vulnerability.ID),
 			Reachability: models.ReachUnknown,
 			FirstSeen:    now,
 			LastSeen:     now,
@@ -155,6 +157,16 @@ func pickFixVersion(f grypeFix) string {
 		return ""
 	}
 	return f.Versions[0]
+}
+
+func advisoryURL(id string) string {
+	switch {
+	case strings.HasPrefix(id, "CVE-"):
+		return "https://nvd.nist.gov/vuln/detail/" + id
+	case strings.HasPrefix(id, "GHSA-"):
+		return "https://github.com/advisories/" + id
+	}
+	return ""
 }
 
 func fingerprint(f *models.Finding) string {

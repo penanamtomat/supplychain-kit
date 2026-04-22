@@ -29,9 +29,5 @@ remediation:
 quality_gate:
   fail_on:
     - severity: critical
-      reachable: true
-    - severity: high
-      reachable: true
-      max_count: 0
   warn_on:
-    - severity: medium
+    - severity: high

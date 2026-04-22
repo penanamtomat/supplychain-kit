@@ -42,12 +42,14 @@ func main() {
 
 func scanCmd() *cobra.Command {
 	var (
-		repo   string
-		ref    string
-		out    string
-		mode   string
-		format string
-		target string
+		repo          string
+		ref           string
+		out           string
+		mode          string
+		format        string
+		target        string
+		semgrepConfig string
+		gitHistory    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "scan",
@@ -72,7 +74,7 @@ Target:
 				return fmt.Errorf("--repo required")
 			}
 
-			reg := buildRegistry(mode)
+			reg := buildRegistry(mode, semgrepConfig, gitHistory)
 			asset := &models.Asset{
 				ID:          "local",
 				Name:        repo,
@@ -143,6 +145,8 @@ Target:
 	cmd.Flags().StringVar(&mode, "mode", "all", "scanner mode: sca, sast, all")
 	cmd.Flags().StringVar(&format, "format", "", "output format: json, table")
 	cmd.Flags().StringVar(&target, "target", "", "target name — saves reports to results/<target>/")
+	cmd.Flags().StringVar(&semgrepConfig, "semgrep-config", "", "semgrep ruleset override (default: p/owasp-top-ten)")
+	cmd.Flags().BoolVar(&gitHistory, "git-history", false, "scan git commit history for secrets (gitleaks)")
 	return cmd
 }
 
@@ -194,8 +198,8 @@ func writeTargetReports(dir string, findings []*models.Finding, repo, mode strin
 // writeTableTo writes a human-readable table to any io.Writer.
 func writeTableTo(w *os.File, findings []*models.Finding) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE")
-	fmt.Fprintln(tw, "--------\t----------\t-------\t---\t----")
+	fmt.Fprintln(tw, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tADVISORY")
+	fmt.Fprintln(tw, "--------\t----------\t-------\t---\t----\t--------")
 	for _, f := range findings {
 		pkg := f.Package
 		if pkg == "" {
@@ -211,55 +215,104 @@ func writeTableTo(w *os.File, findings []*models.Finding) {
 		} else if f.Line > 0 {
 			loc = fmt.Sprintf("%s:%d", loc, f.Line)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+		adv := f.AdvisoryURL
+		if adv == "" {
+			adv = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			strings.ToUpper(string(f.Severity)),
-			f.RuleID, pkg, fix, loc,
+			f.RuleID, pkg, fix, loc, adv,
 		)
 	}
 	tw.Flush()
 }
 
 // buildRegistry returns a Registry populated according to the requested mode.
-func buildRegistry(mode string) *scanner.Registry {
+func buildRegistry(mode, semgrepConfig string, gitHistory bool) *scanner.Registry {
+	sg := semgrep.New()
+	if semgrepConfig != "" {
+		sg.WithConfig(semgrepConfig)
+	}
+	gl := gitleaks.New()
+	if gitHistory {
+		gl.WithGitHistory()
+	}
 	switch mode {
 	case "sca":
 		return scanner.NewRegistry(syftadapter.New(), grype.New())
 	case "sast":
-		return scanner.NewRegistry(semgrep.New(), gitleaks.New())
+		return scanner.NewRegistry(sg, gl)
 	default:
 		return scanner.NewRegistry(
 			syftadapter.New(), grype.New(),
-			semgrep.New(), gitleaks.New(),
+			sg, gl,
 			joern.New(),
 		)
 	}
 }
 
-// printSummary writes a one-line count per severity to stderr.
+// printSummary writes a sectioned count (SCA / SAST / Secrets) to stderr.
 func printSummary(findings []*models.Finding) {
+	var sca, sast, secrets []*models.Finding
+	for _, f := range findings {
+		switch categorizeFinding(f) {
+		case "sca":
+			sca = append(sca, f)
+		case "sast":
+			sast = append(sast, f)
+		case "secrets":
+			secrets = append(secrets, f)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "\n── Scan Summary ─────────────────────────\n")
+	fmt.Fprintf(os.Stderr, "  Total findings : %d\n\n", len(findings))
+	printSummarySection("SCA  (dependencies)", sca)
+	printSummarySection("SAST (code)", sast)
+	printSummarySection("Secrets", secrets)
+	fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n")
+}
+
+func categorizeFinding(f *models.Finding) string {
+	for _, s := range f.Sources {
+		switch s {
+		case models.SourceGrype, models.SourceSyft:
+			return "sca"
+		case models.SourceGitleaks:
+			return "secrets"
+		case models.SourceSemgrep, models.SourceJoern:
+			return "sast"
+		}
+	}
+	return "other"
+}
+
+func printSummarySection(label string, findings []*models.Finding) {
+	if len(findings) == 0 {
+		fmt.Fprintf(os.Stderr, "  %-22s: none\n", label)
+		return
+	}
 	counts := map[models.Severity]int{}
 	for _, f := range findings {
 		counts[f.Severity]++
 	}
-	total := len(findings)
-	fmt.Fprintf(os.Stderr, "\n── Scan Summary ─────────────────────────\n")
-	fmt.Fprintf(os.Stderr, "  Total findings : %d\n", total)
+	var parts []string
 	for _, sev := range []models.Severity{
 		models.SeverityCritical, models.SeverityHigh,
 		models.SeverityMedium, models.SeverityLow, models.SeverityInfo,
 	} {
 		if n := counts[sev]; n > 0 {
-			fmt.Fprintf(os.Stderr, "  %-10s : %d\n", strings.ToUpper(string(sev)), n)
+			parts = append(parts, fmt.Sprintf("%s:%d", strings.ToUpper(string(sev)), n))
 		}
 	}
-	fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n")
+	fmt.Fprintf(os.Stderr, "  %-22s: %s\n", label, strings.Join(parts, "  "))
 }
 
 // printTable writes a human-readable table of findings to stdout.
 func printTable(findings []*models.Finding) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE")
-	fmt.Fprintln(w, "--------\t----------\t-------\t---\t----")
+	fmt.Fprintln(w, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tADVISORY")
+	fmt.Fprintln(w, "--------\t----------\t-------\t---\t----\t--------")
 	for _, f := range findings {
 		pkg := f.Package
 		if pkg == "" {
@@ -275,9 +328,13 @@ func printTable(findings []*models.Finding) error {
 		} else if f.Line > 0 {
 			loc = fmt.Sprintf("%s:%d", loc, f.Line)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		adv := f.AdvisoryURL
+		if adv == "" {
+			adv = "-"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			strings.ToUpper(string(f.Severity)),
-			f.RuleID, pkg, fix, loc,
+			f.RuleID, pkg, fix, loc, adv,
 		)
 	}
 	return w.Flush()
@@ -291,6 +348,17 @@ func gateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gate",
 		Short: "Evaluate a finding set against the configured Quality Gate",
+		Long: `Evaluate a findings JSON against the quality gate policy.
+
+Exit codes:
+  0  pass — no policy violations
+  1  warn — High findings present (no Critical)
+  2  fail — Critical findings present
+
+Examples:
+  supplychain-kit gate --findings results/myapp/findings.json
+  supplychain-kit gate --findings results/myapp/findings.json --policy configs/policy-strict.yaml
+  supplychain-kit scan --repo . --format json | supplychain-kit gate`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			findings, err := readFindings(findingsFile)
 			if err != nil {
@@ -301,7 +369,13 @@ func gateCmd() *cobra.Command {
 				return err
 			}
 			result := quality.New(cfg.QualityGate).Evaluate(findings)
-			_ = json.NewEncoder(os.Stdout).Encode(result)
+
+			printGateResult(result)
+
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(result)
+
 			switch result.Decision {
 			case quality.DecisionFail:
 				os.Exit(2)
@@ -314,6 +388,56 @@ func gateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&findingsFile, "findings", "-", "findings JSON file (- for stdin)")
 	cmd.Flags().StringVar(&policyFile, "policy", "", "policy YAML file (defaults to configs/aspm.yaml)")
 	return cmd
+}
+
+// printGateResult writes a human-readable gate summary to stderr.
+func printGateResult(result quality.Result) {
+	decisionColor := map[quality.Decision]string{
+		quality.DecisionPass: "PASS",
+		quality.DecisionWarn: "WARN",
+		quality.DecisionFail: "FAIL",
+	}
+	label := decisionColor[result.Decision]
+
+	fmt.Fprintf(os.Stderr, "\n── Quality Gate ──────────────────────────\n")
+	fmt.Fprintf(os.Stderr, "  Decision : %s\n", label)
+	fmt.Fprintf(os.Stderr, "  Summary  : %s\n", result.Summary)
+
+	if len(result.Violations) > 0 {
+		fmt.Fprintf(os.Stderr, "\n  Violations:\n")
+		for _, v := range result.Violations {
+			f := v.Finding
+			loc := f.Package
+			if loc == "" {
+				loc = f.FilePath
+			}
+			if loc == "" {
+				loc = "-"
+			}
+			adv := ""
+			if f.AdvisoryURL != "" {
+				adv = "  " + f.AdvisoryURL
+			}
+			fmt.Fprintf(os.Stderr, "    [%s] %s  %s%s\n",
+				strings.ToUpper(string(f.Severity)), f.RuleID, loc, adv)
+		}
+	}
+	if len(result.Warnings) > 0 {
+		fmt.Fprintf(os.Stderr, "\n  Warnings:\n")
+		for _, w := range result.Warnings {
+			f := w.Finding
+			loc := f.Package
+			if loc == "" {
+				loc = f.FilePath
+			}
+			if loc == "" {
+				loc = "-"
+			}
+			fmt.Fprintf(os.Stderr, "    [%s] %s  %s\n",
+				strings.ToUpper(string(f.Severity)), f.RuleID, loc)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
 }
 
 func submitCmd() *cobra.Command {
@@ -479,10 +603,12 @@ func readFindings(path string) ([]*models.Finding, error) {
 
 func runCmd() *cobra.Command {
 	var (
-		repo   string
-		ref    string
-		mode   string
-		policy string
+		repo          string
+		ref           string
+		mode          string
+		policy        string
+		semgrepConfig string
+		gitHistory    bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run <engagement>",
@@ -527,7 +653,7 @@ Examples:
 			fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
 
 			// Step 1 & 2: scan
-			reg := buildRegistry(mode)
+			reg := buildRegistry(mode, semgrepConfig, gitHistory)
 			asset := &models.Asset{
 				ID:          engagement,
 				Name:        repo,
@@ -608,6 +734,8 @@ Examples:
 	cmd.Flags().StringVar(&ref, "ref", "HEAD", "git ref (branch, tag, commit)")
 	cmd.Flags().StringVar(&mode, "mode", "all", "scanner mode: sca, sast, all")
 	cmd.Flags().StringVar(&policy, "policy", "", "policy YAML (default: configs/aspm.yaml)")
+	cmd.Flags().StringVar(&semgrepConfig, "semgrep-config", "", "semgrep ruleset override (default: p/owasp-top-ten)")
+	cmd.Flags().BoolVar(&gitHistory, "git-history", false, "scan git commit history for secrets (gitleaks)")
 	_ = cmd.MarkFlagRequired("repo")
 	return cmd
 }

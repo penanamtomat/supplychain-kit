@@ -314,15 +314,23 @@ else
 fi
 
 # ── semgrep ───────────────────────────────────────────────────────────────────
+# semgrep_works: returns 0 if the installed semgrep binary actually executes.
+semgrep_works() {
+  semgrep --version >/dev/null 2>&1
+}
+
 if $SKIP_SEMGREP; then
   warn "Skipping semgrep (--no-semgrep)"
-elif check semgrep || [ -f "${INSTALL_DIR}/semgrep${EXT}" ]; then
-  info "semgrep already installed"
+elif semgrep_works; then
+  info "semgrep already installed: $(semgrep --version 2>/dev/null)"
 else
   echo "  Installing semgrep v${SEMGREP_VERSION}..."
   SEMGREP_OK=false
 
-  # macOS: prefer brew; Linux/Windows: prefer pip3/pip.
+  # macOS: prefer brew (includes native binary); Linux: pip3/pip.
+  # Windows note: semgrep 1.x pip wheel does NOT bundle the native semgrep-core
+  # binary on Windows — the pip install succeeds but the command fails at runtime.
+  # Use WSL or Docker instead. See: https://semgrep.dev/docs/getting-started/
   if [ "$OS" = "darwin" ] && check brew; then
     brew install semgrep --quiet 2>&1 | tail -1 && SEMGREP_OK=true
   elif check pip3; then
@@ -333,13 +341,27 @@ else
     pipx install "semgrep==${SEMGREP_VERSION}" && SEMGREP_OK=true
   fi
 
+  # Post-install sanity check: pip install may succeed but semgrep may not run
+  # (known issue on Windows where the native semgrep-core binary is absent).
+  if $SEMGREP_OK && ! semgrep_works; then
+    SEMGREP_OK=false
+    if [ "$OS" = "windows" ]; then
+      warn "semgrep installed via pip but cannot run on Windows (native binary missing)."
+      warn "Workaround — use WSL and run semgrep from there:"
+      warn "  wsl bash install.sh"
+      warn "SAST code analysis will be skipped on native Windows."
+    fi
+  fi
+
   if $SEMGREP_OK; then
-    info "semgrep installed"
+    info "semgrep installed: $(semgrep --version 2>/dev/null)"
   else
-    warn "semgrep installation failed — SAST code analysis will be unavailable"
-    warn "Install manually:"
-    warn "  macOS : brew install semgrep"
-    warn "  Others: pip3 install semgrep==${SEMGREP_VERSION}"
+    if [ "$OS" != "windows" ]; then
+      warn "semgrep installation failed — SAST code analysis will be unavailable"
+      warn "Install manually:"
+      warn "  macOS : brew install semgrep"
+      warn "  Others: pip3 install semgrep==${SEMGREP_VERSION}"
+    fi
   fi
 fi
 

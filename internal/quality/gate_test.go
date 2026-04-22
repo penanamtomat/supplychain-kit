@@ -38,3 +38,37 @@ func TestGate_PassWhenNoMatches(t *testing.T) {
 		t.Fatalf("expected pass, got %s", res.Decision)
 	}
 }
+
+// defaultPolicy mirrors the built-in default: fail on Critical, warn on High.
+var defaultPolicy = config.QualityGateConfig{
+	FailOn: []config.GateRule{{Severity: "critical"}},
+	WarnOn: []config.GateRule{{Severity: "high"}},
+}
+
+func TestGate_CriticalExitsFail(t *testing.T) {
+	res := New(defaultPolicy).Evaluate([]*models.Finding{
+		{Severity: models.SeverityCritical, Reachability: models.ReachUnknown},
+	})
+	if res.Decision != DecisionFail {
+		t.Fatalf("Critical finding must produce Fail, got %s", res.Decision)
+	}
+	if len(res.Violations) == 0 {
+		t.Fatal("expected at least one violation")
+	}
+}
+
+func TestGate_HighOnlyExitsWarn(t *testing.T) {
+	res := New(defaultPolicy).Evaluate([]*models.Finding{
+		{Severity: models.SeverityHigh, Reachability: models.ReachUnknown},
+	})
+	if res.Decision != DecisionWarn {
+		t.Fatalf("High-only findings must produce Warn, got %s", res.Decision)
+	}
+}
+
+func TestGate_EmptyFindingsExitsPass(t *testing.T) {
+	res := New(defaultPolicy).Evaluate([]*models.Finding{})
+	if res.Decision != DecisionPass {
+		t.Fatalf("empty findings must produce Pass, got %s", res.Decision)
+	}
+}

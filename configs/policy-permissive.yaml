@@ -1,0 +1,12 @@
+# policy-permissive.yaml — warn only, never fail.
+# Use during onboarding or in repositories with known legacy debt.
+# Pipeline always exits 0 (pass) or 1 (warn); never 2 (fail).
+#
+# Usage: supplychain-kit gate --findings findings.json --policy configs/policy-permissive.yaml
+
+quality_gate:
+  fail_on: []
+  warn_on:
+    - severity: critical
+    - severity: high
+    - severity: medium

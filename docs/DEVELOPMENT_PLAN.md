@@ -66,30 +66,30 @@ Saat ini syft dan grype berjalan secara concurrent, padahal grype membutuhkan SB
 
 ### Semgrep Integration
 
-- [ ] Verifikasi `semgrep --json` output parsing terhadap versi semgrep terkini (1.75+)
-- [ ] Flag `--semgrep-config <rule>` untuk override ruleset (default: `p/owasp-top-ten`)
-- [ ] Filtering: abaikan findings dari direktori `vendor/`, `node_modules/`, `.git/`
-- [ ] Deduplikasi: findings dari baris yang sama tidak muncul dua kali
+- [x] Verifikasi `semgrep --json` output parsing terhadap versi semgrep terkini (1.75+)
+- [x] Flag `--semgrep-config <rule>` untuk override ruleset (default: `p/owasp-top-ten`)
+- [x] Filtering: abaikan findings dari direktori `vendor/`, `node_modules/`, `.git/`
+- [x] Deduplikasi: findings dari baris yang sama tidak muncul dua kali
 
 ### Gitleaks Integration
 
-- [ ] Mode `--no-git`: scan working directory tanpa git history (sudah ada, verifikasi berfungsi)
-- [ ] Mode `--git-history`: scan git history untuk secret yang sudah ter-commit (opsional)
-- [ ] Suppress rule: dukung `.gitleaksignore` file di root repo
+- [x] Mode `--no-git`: scan working directory tanpa git history (sudah ada, verifikasi berfungsi)
+- [x] Mode `--git-history`: scan git history untuk secret yang sudah ter-commit (opsional)
+- [x] Suppress rule: dukung `.gitleaksignore` file di root repo
 
 ### Output Gabungan SCA + SAST
 
-- [ ] `supplychain-kit scan --mode all` menampilkan ringkasan gabungan:
+- [x] `supplychain-kit scan --mode all` menampilkan ringkasan gabungan:
   - Bagian SCA: dependency vulnerabilities
   - Bagian SAST: code findings
   - Bagian Secrets: secret findings
-- [ ] Setiap finding menampilkan link ke dokumentasi atau advisory
+- [x] Setiap finding menampilkan link ke dokumentasi atau advisory
 
 ### Test
 
-- [ ] Test semgrep parsing terhadap fixture yang mengandung berbagai severity
-- [ ] Test gitleaks parsing terhadap fixture yang mengandung secret
-- [ ] Test deduplication: finding yang sama dari dua scanner collapse menjadi satu
+- [x] Test semgrep parsing terhadap fixture yang mengandung berbagai severity
+- [x] Test gitleaks parsing terhadap fixture yang mengandung secret
+- [x] Test deduplication: finding yang sama dari dua scanner collapse menjadi satu
 
 ---
 
@@ -99,29 +99,29 @@ Saat ini syft dan grype berjalan secara concurrent, padahal grype membutuhkan SB
 
 ### CLI `gate` Command
 
-- [ ] `supplychain-kit gate --findings <file.json>` berjalan penuh (tanpa `--policy` pun ada default)
-- [ ] Default policy: fail jika ada Critical, warn jika ada High
-- [ ] `--policy <file.yaml>` untuk override policy
-- [ ] Exit code: `0` (pass), `1` (warn), `2` (fail)
-- [ ] Output human-readable ke stderr, JSON ke stdout
+- [x] `supplychain-kit gate --findings <file.json>` berjalan penuh (tanpa `--policy` pun ada default)
+- [x] Default policy: fail jika ada Critical, warn jika ada High
+- [x] `--policy <file.yaml>` untuk override policy
+- [x] Exit code: `0` (pass), `1` (warn), `2` (fail)
+- [x] Output human-readable ke stderr, JSON ke stdout
 
 ### Template Policy
 
-- [ ] `configs/policy-strict.yaml` — fail pada Critical dan High
-- [ ] `configs/policy-moderate.yaml` — fail pada Critical saja
-- [ ] `configs/policy-permissive.yaml` — warn saja, tidak pernah fail
+- [x] `configs/policy-strict.yaml` — fail pada Critical dan High
+- [x] `configs/policy-moderate.yaml` — fail pada Critical saja
+- [x] `configs/policy-permissive.yaml` — warn saja, tidak pernah fail
 
 ### Pipeline One-liner
 
-- [ ] `supplychain-kit scan --repo . | supplychain-kit gate` bisa dipakai tanpa file perantara
-- [ ] Contoh GitHub Actions snippet di README
-- [ ] Contoh GitLab CI snippet di README
+- [x] `supplychain-kit scan --repo . --format json | supplychain-kit gate` bisa dipakai tanpa file perantara
+- [x] Contoh GitHub Actions snippet di README
+- [x] Contoh GitLab CI snippet di README
 
 ### Test
 
-- [ ] Test gate dengan findings fixture yang berisi Critical → harus exit 2
-- [ ] Test gate dengan findings fixture yang berisi High saja → harus exit 1
-- [ ] Test gate dengan findings fixture kosong → harus exit 0
+- [x] Test gate dengan findings fixture yang berisi Critical → harus exit 2
+- [x] Test gate dengan findings fixture yang berisi High saja → harus exit 1
+- [x] Test gate dengan findings fixture kosong → harus exit 0
 
 ---
 

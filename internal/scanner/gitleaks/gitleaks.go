@@ -20,13 +20,20 @@ import (
 )
 
 // Adapter wraps the gitleaks CLI.
-type Adapter struct{ binary string }
+type Adapter struct {
+	binary     string
+	gitHistory bool
+}
 
 // New returns a new gitleaks Adapter.
 func New() *Adapter { return &Adapter{binary: "gitleaks"} }
 
 // NewWithBinary returns an Adapter using the supplied binary path — useful in tests.
 func NewWithBinary(bin string) *Adapter { return &Adapter{binary: bin} }
+
+// WithGitHistory enables scanning git commit history for leaked secrets.
+// By default only the working tree is scanned (--no-git).
+func (a *Adapter) WithGitHistory() *Adapter { a.gitHistory = true; return a }
 
 func (a *Adapter) Name() string                  { return "gitleaks" }
 func (a *Adapter) Source() models.FindingSource { return models.SourceGitleaks }
@@ -42,8 +49,12 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 		return out, err
 	}
 
-	cmd := exec.CommandContext(ctx, a.binary, "detect", "--source", req.CheckoutDir, "--no-git",
-		"--report-format", "json", "--report-path", report, "--exit-code", "0")
+	args := []string{"detect", "--source", req.CheckoutDir,
+		"--report-format", "json", "--report-path", report, "--exit-code", "0"}
+	if !a.gitHistory {
+		args = append(args, "--no-git")
+	}
+	cmd := exec.CommandContext(ctx, a.binary, args...)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return out, fmt.Errorf("gitleaks: %w", err)

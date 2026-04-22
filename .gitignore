@@ -36,3 +36,4 @@ findings.json
 findings.*.json
 scan-results/
 reports/
+result/

@@ -1,0 +1,37 @@
+# ASPM platform configuration. All values can be overridden by environment
+# variables prefixed with ASPM_ (dots become underscores).
+
+http:
+  addr: ":8080"
+  read_timeout_sec: 30
+
+database:
+  dsn: "postgres://aspm:aspm@localhost:5432/aspm?sslmode=disable"
+  max_conns: 10
+  auto_migrate: true
+
+redis:
+  url: "redis://localhost:6379/0"
+
+scanners:
+  work_dir: "/tmp/aspm-work"
+  max_parallel_syft: 4
+  max_parallel_grype: 4
+  max_parallel_sast: 2
+  grype_db_max_age_hrs: 24
+
+remediation:
+  base_url: "http://localhost:9090"
+  llm_provider: "anthropic"   # anthropic | openai | noop
+
+# Quality Gate policy. The CLI exits non-zero when fail_on triggers and exit
+# code 1 when warn_on triggers (but no fail_on rule fires).
+quality_gate:
+  fail_on:
+    - severity: critical
+      reachable: true
+    - severity: high
+      reachable: true
+      max_count: 0
+  warn_on:
+    - severity: medium

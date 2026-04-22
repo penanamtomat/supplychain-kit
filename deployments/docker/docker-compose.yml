@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aspm
+      POSTGRES_PASSWORD: aspm
+      POSTGRES_DB: aspm
+    ports:
+      - "5432:5432"
+    volumes:
+      - aspm-pg:/var/lib/postgresql/data
+      - ../../migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aspm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  aspm-api:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ASPM_DATABASE_DSN: "postgres://aspm:aspm@postgres:5432/aspm?sslmode=disable"
+      ASPM_REDIS_URL: "redis://redis:6379/0"
+      ASPM_REMEDIATION_BASE_URL: "http://aspm-remediation:9090"
+    ports:
+      - "8080:8080"
+
+  aspm-scanner:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.scanner
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ASPM_DATABASE_DSN: "postgres://aspm:aspm@postgres:5432/aspm?sslmode=disable"
+      ASPM_REDIS_URL: "redis://redis:6379/0"
+
+  aspm-remediation:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.remediation
+    environment:
+      ASPM_LLM_PROVIDER: "noop"
+    ports:
+      - "9090:9090"
+
+volumes:
+  aspm-pg:

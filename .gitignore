@@ -1,0 +1,32 @@
+# Build outputs
+bin/
+dist/
+*.exe
+
+# Go
+*.test
+*.out
+coverage.html
+vendor/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local secrets / data
+.env
+.env.local
+*.key
+*.pem
+.aspm/
+/tmp/

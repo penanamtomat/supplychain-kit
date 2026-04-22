@@ -4,18 +4,18 @@
 # Supported platforms: Linux, macOS, Windows (Git Bash / MSYS2)
 #
 # What this script removes:
-#   • aspm-cli binary from INSTALL_DIR and ./bin/
+#   • supplychain-kit binary from INSTALL_DIR and ./bin/
 #   • Scanner tools (syft, grype, gitleaks, semgrep) — only with --tools flag
 #
 # Usage:
-#   bash uninstall.sh            # remove aspm-cli only
-#   bash uninstall.sh --tools    # remove aspm-cli + all scanner tools
+#   bash uninstall.sh            # remove supplychain-kit only
+#   bash uninstall.sh --tools    # remove supplychain-kit + all scanner tools
 #   bash uninstall.sh --help
 
 set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-}"   # resolved after OS detection
-BINARY_NAME="aspm-cli"
+BINARY_NAME="supplychain-kit"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── colours ───────────────────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ Options:
   --help      Show this help
 
 Environment variables:
-  INSTALL_DIR    Directory where aspm-cli was installed
+  INSTALL_DIR    Directory where supplychain-kit was installed
                  (default: ~/.local/bin on Linux/Windows,
                            /usr/local/bin on macOS if it was writable)
 EOF
@@ -143,8 +143,8 @@ remove_semgrep() {
   $removed_any || skipped "semgrep"
 }
 
-# ── step 1: remove aspm-cli ───────────────────────────────────────────────────
-section "Removing aspm-cli"
+# ── step 1: remove supplychain-kit ───────────────────────────────────────────────────
+section "Removing supplychain-kit"
 
 # From INSTALL_DIR.
 BINARY_PATH="${INSTALL_DIR}/${BINARY_NAME}${EXT}"
@@ -152,7 +152,7 @@ if [ -f "$BINARY_PATH" ]; then
   rm -f "$BINARY_PATH"
   removed "$BINARY_PATH"
 else
-  warn "aspm-cli not found at $BINARY_PATH — already removed?"
+  warn "supplychain-kit not found at $BINARY_PATH — already removed?"
 fi
 
 # From local ./bin/ build directory.

@@ -25,13 +25,24 @@ const ArtifactSBOMPath = scanner.ArtifactSBOMPath
 // Adapter is the syft scanner adapter.
 type Adapter struct {
 	binary string // override for tests; defaults to "syft" on PATH
+	format string // "cyclonedx-json" or "spdx-json"
 }
 
-// New returns a new syft Adapter.
-func New() *Adapter { return &Adapter{binary: "syft"} }
+// New returns a new syft Adapter using CycloneDX 1.5 output.
+func New() *Adapter { return &Adapter{binary: "syft", format: "cyclonedx-json"} }
 
 // NewWithBinary returns an Adapter using the supplied binary path — useful in tests.
-func NewWithBinary(bin string) *Adapter { return &Adapter{binary: bin} }
+func NewWithBinary(bin string) *Adapter { return &Adapter{binary: bin, format: "cyclonedx-json"} }
+
+// NewWithFormat returns an Adapter that emits the requested SBOM format.
+// Accepted values: "cyclonedx" / "cyclonedx-json" (default) and "spdx" / "spdx-json".
+func NewWithFormat(fmt string) *Adapter {
+	f := "cyclonedx-json"
+	if fmt == "spdx" || fmt == "spdx-json" {
+		f = "spdx-json"
+	}
+	return &Adapter{binary: "syft", format: f}
+}
 
 func (a *Adapter) Name() string                  { return "syft" }
 func (a *Adapter) Source() models.FindingSource { return models.SourceSyft }
@@ -44,12 +55,16 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 		return out, err
 	}
 
-	sbomPath := filepath.Join(req.CheckoutDir, ".aspm", "sbom.cdx.json")
+	ext := "cdx.json"
+	if a.format == "spdx-json" {
+		ext = "spdx.json"
+	}
+	sbomPath := filepath.Join(req.CheckoutDir, ".aspm", "sbom."+ext)
 	if err := os.MkdirAll(filepath.Dir(sbomPath), 0o755); err != nil {
 		return out, fmt.Errorf("mkdir: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, a.binary, "dir:"+req.CheckoutDir, "-o", "cyclonedx-json="+sbomPath, "--quiet")
+	cmd := exec.CommandContext(ctx, a.binary, "dir:"+req.CheckoutDir, "-o", a.format+"="+sbomPath, "--quiet")
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return out, fmt.Errorf("syft: %w", err)

@@ -28,7 +28,7 @@ This document describes the technical architecture that implements the PRD ([doc
                              ▼
 ┌──────────────┐   ┌────────────────────┐   ┌──────────────────┐
 │  CLI / CI    │──►│  Scanner Worker    │──►│  Scanner Adapters│
-│  aspm-cli    │   │  cmd/aspm-scanner  │   │  syft / grype /  │
+│  supplychain-kit    │   │  cmd/aspm-scanner  │   │  syft / grype /  │
 └──────────────┘   └──────────┬─────────┘   │  semgrep / joern │
                               │             │  / gitleaks      │
                               │             └────────┬─────────┘
@@ -162,7 +162,7 @@ A typical scan of a feature branch:
 6. Scoring annotates each finding with the integrated risk score.
 7. Quality Gate runs against the policy attached to the asset; if the PR violates, the CLI exits non-zero, blocking the merge.
 8. For new findings above the auto-remediation threshold, the remediation service either opens a Renovate-style PR (SCA) or a Claude-authored review comment (SAST).
-9. On release tag, `aspm-cli vex --tag v1.4.0` emits a CSAF 2.0 document signed and published as a GitHub Release artifact.
+9. On release tag, `supplychain-kit vex --tag v1.4.0` emits a CSAF 2.0 document signed and published as a GitHub Release artifact.
 
 ## 4. Concurrency model
 

@@ -1,6 +1,6 @@
-// Command aspm-cli is the operator CLI for local scans, quality gate checks,
-// and one-shot scan submission. It is intended to be the integration point
-// for CI pipelines.
+// Command supplychain-kit is the operator CLI for local scans, quality gate
+// checks, and one-shot scan submission. It is intended to be the integration
+// point for CI pipelines.
 package main
 
 import (
@@ -30,7 +30,7 @@ import (
 )
 
 func main() {
-	root := &cobra.Command{Use: "aspm-cli", Short: "ASPM operator CLI"}
+	root := &cobra.Command{Use: "supplychain-kit", Short: "ASPM operator CLI"}
 	root.AddCommand(scanCmd(), gateCmd(), submitCmd(), sbomCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -91,6 +91,7 @@ Target:
 				_ = artifacts
 				cleanup = func() {}
 			} else {
+				asset.RepoURL = repo
 				var artifacts map[string]string
 				var err error
 				results, artifacts, cleanup, err = reg.RunPipeline(cmd.Context(), asset, ref)
@@ -340,16 +341,23 @@ func sbomCmd() *cobra.Command {
 	var (
 		repo   string
 		out    string
+		format string
 		target string
 	)
 	cmd := &cobra.Command{
 		Use:   "sbom",
 		Short: "Generate a CycloneDX 1.5 SBOM for a repository",
+		Long: `Generate an SBOM for a local or remote repository using syft.
+
+Formats:
+  cyclonedx  CycloneDX 1.5 JSON (default)
+  spdx       SPDX 2.3 JSON`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if repo == "" {
 				return fmt.Errorf("--repo required")
 			}
-			reg := scanner.NewRegistry(syftadapter.New())
+			syftScanner := syftadapter.NewWithFormat(format)
+			reg := scanner.NewRegistry(syftScanner)
 			asset := &models.Asset{ID: "local", Name: repo, Environment: models.EnvDev, Tier: 2}
 
 			var results []scanner.ScannedResult
@@ -360,6 +368,7 @@ func sbomCmd() *cobra.Command {
 				}
 				results, _ = reg.RunLocal(cmd.Context(), asset, abs)
 			} else {
+				asset.RepoURL = repo
 				var err error
 				var cleanup func()
 				results, _, cleanup, err = reg.RunPipeline(cmd.Context(), asset, "HEAD")
@@ -412,6 +421,7 @@ func sbomCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "local path or git repository URL")
 	cmd.Flags().StringVar(&out, "out", "-", "output file (- for stdout)")
+	cmd.Flags().StringVar(&format, "format", "cyclonedx", "output format: cyclonedx, spdx")
 	cmd.Flags().StringVar(&target, "target", "", "target name — saves SBOM to results/<target>/sbom.json")
 	return cmd
 }

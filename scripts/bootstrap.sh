@@ -23,4 +23,4 @@ echo "[4/4] Bringing up dev stack and applying migrations..."
 sleep 3
 ( cd "$ROOT" && PGPASSWORD=aspm psql -h localhost -U aspm -d aspm -f migrations/0001_init.sql )
 
-echo "Done. Try: ./bin/aspm-cli scan --repo https://github.com/OWASP/NodeGoat"
+echo "Done. Try: ./bin/supplychain-kit scan --repo https://github.com/OWASP/NodeGoat"

@@ -9,8 +9,8 @@
 # What this script does:
 #   1. Verify prerequisites  (Go, git, curl)
 #   2. Install scanner tools (syft, grype, gitleaks, semgrep)
-#   3. Build aspm-cli binary from source
-#   4. Install aspm-cli into a directory on PATH
+#   3. Build supplychain-kit binary from source
+#   4. Install supplychain-kit into a directory on PATH
 #   5. Print PATH setup instructions when needed
 #
 # Usage:
@@ -20,7 +20,7 @@
 #   bash install.sh --help
 #
 # Environment overrides:
-#   INSTALL_DIR      destination for aspm-cli  (default: ~/.local/bin)
+#   INSTALL_DIR      destination for supplychain-kit  (default: ~/.local/bin)
 #   GITLEAKS_VERSION gitleaks release to fetch (default: 8.21.2)
 #   SEMGREP_VERSION  semgrep release to install (default: 1.75.0)
 
@@ -30,7 +30,7 @@ set -euo pipefail
 GITLEAKS_VERSION="${GITLEAKS_VERSION:-8.21.2}"
 SEMGREP_VERSION="${SEMGREP_VERSION:-1.75.0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BINARY_NAME="aspm-cli"
+BINARY_NAME="supplychain-kit"
 
 # ── colours ───────────────────────────────────────────────────────────────────
 # Disable colours when not writing to a terminal.
@@ -62,7 +62,7 @@ Usage: bash install.sh [OPTIONS]
 
 Options:
   --no-semgrep        Skip semgrep installation (requires Python/pip)
-  --prefix <dir>      Install aspm-cli and scanner tools to <dir>
+  --prefix <dir>      Install supplychain-kit and scanner tools to <dir>
                       (default: ~/.local/bin on Linux/Windows,
                                 /usr/local/bin on macOS if writable)
   --help              Show this help
@@ -343,26 +343,26 @@ else
   fi
 fi
 
-# ── step 3: build aspm-cli from source ───────────────────────────────────────
-section "Step 3/4 — Building aspm-cli from source"
+# ── step 3: build supplychain-kit from source ───────────────────────────────────────
+section "Step 3/4 — Building supplychain-kit from source"
 
 cd "$SCRIPT_DIR"
 
 echo "  Downloading Go modules..."
 go mod download
 
-echo "  Compiling aspm-cli..."
+echo "  Compiling supplychain-kit..."
 mkdir -p "${SCRIPT_DIR}/bin"
 BINARY_PATH="${SCRIPT_DIR}/bin/${BINARY_NAME}${EXT}"
-go build -ldflags="-s -w" -o "$BINARY_PATH" ./cmd/aspm-cli/...
+go build -ldflags="-s -w" -o "$BINARY_PATH" ./cmd/supplychain-kit/...
 info "Binary built → ${BINARY_PATH}"
 
-# ── step 4: install aspm-cli to PATH ─────────────────────────────────────────
-section "Step 4/4 — Installing aspm-cli"
+# ── step 4: install supplychain-kit to PATH ─────────────────────────────────────────
+section "Step 4/4 — Installing supplychain-kit"
 
 ensure_install_dir
 copy_bin "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}${EXT}"
-info "aspm-cli installed → ${INSTALL_DIR}/${BINARY_NAME}${EXT}"
+info "supplychain-kit installed → ${INSTALL_DIR}/${BINARY_NAME}${EXT}"
 
 # ── summary ───────────────────────────────────────────────────────────────────
 echo ""
@@ -379,7 +379,7 @@ for bin in syft grype gitleaks semgrep; do
     echo -e "  ${YELLOW}✗${RESET} ${bin}  (not installed — that scanner will be skipped)"
   fi
 done
-echo -e "  ${GREEN}✓${RESET} aspm-cli → ${INSTALL_DIR}/${BINARY_NAME}${EXT}"
+echo -e "  ${GREEN}✓${RESET} supplychain-kit → ${INSTALL_DIR}/${BINARY_NAME}${EXT}"
 
 # PATH setup hint — only shown when needed.
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
@@ -400,10 +400,13 @@ fi
 
 echo ""
 echo -e "${BOLD}Quick start (after reloading shell):${RESET}"
-echo -e "  ${CYAN}aspm-cli scan --repo /path/to/project --mode sca${RESET}"
-echo -e "  ${CYAN}aspm-cli scan --repo /path/to/project --mode sast${RESET}"
-echo -e "  ${CYAN}aspm-cli scan --repo /path/to/project --out findings.json${RESET}"
-echo -e "  ${CYAN}aspm-cli gate --findings findings.json${RESET}"
+echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode sca${RESET}"
+echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode sast${RESET}"
+echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode all --target myapp${RESET}"
+echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --out findings.json${RESET}"
+echo -e "  ${CYAN}supplychain-kit sbom --repo /path/to/project --out sbom.json${RESET}"
+echo -e "  ${CYAN}supplychain-kit sbom --repo /path/to/project --target myapp${RESET}"
+echo -e "  ${CYAN}supplychain-kit gate --findings findings.json${RESET}"
 echo ""
 echo -e "To uninstall: ${YELLOW}bash uninstall.sh${RESET}"
 echo ""

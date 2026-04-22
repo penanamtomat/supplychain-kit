@@ -10,9 +10,9 @@
 
 ## Status Saat Ini — v0.2 (Foundation + Scanner Scaffold)
 
-- Tiga binary Go berhasil di-build: `aspm-api`, `aspm-scanner`, `aspm-cli`
+- Tiga binary Go berhasil di-build: `aspm-api`, `aspm-scanner`, `supplychain-kit`
 - Lima scanner adapter sudah mengeksekusi CLI nyata dengan graceful degradation
-- `aspm-cli scan --repo <path|url>` sudah mendukung local path dan remote URL
+- `supplychain-kit scan --repo <path|url>` sudah mendukung local path dan remote URL
 - Unit test untuk semua scanner adapter (8 package lulus)
 - `scripts/install-tools.sh` tersedia untuk instalasi tool scanner
 - Quality gate dan scoring engine sudah terimplementasi dan tested
@@ -21,7 +21,7 @@
 
 ## v0.3 — SCA Pipeline Berfungsi Penuh
 
-**Tujuan:** `aspm-cli scan --mode sca` menghasilkan laporan dependency vulnerability yang akurat dari repositori nyata.
+**Tujuan:** `supplychain-kit scan --mode sca` menghasilkan laporan dependency vulnerability yang akurat dari repositori nyata.
 
 Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pada library apa, dan apakah library tersebut mengandung CVE yang diketahui.
 
@@ -47,22 +47,22 @@ Saat ini syft dan grype berjalan secara concurrent, padahal grype membutuhkan SB
 - [x] `--format table` — tabel temuan ke stdout (rule_id, severity, package, fix)
 - [x] Exit code: `0` jika tidak ada Critical/High, `1` jika ada High, `2` jika ada Critical
 
-### Command `aspm-cli sbom`
+### Command `supplychain-kit sbom`
 
-- [ ] `aspm-cli sbom --repo <path> --out sbom.json` — hasilkan SBOM CycloneDX 1.5 tanpa scan vulnerability
-- [ ] Support `--format spdx` sebagai alternatif output
+- [x] `supplychain-kit sbom --repo <path> --out sbom.json` — hasilkan SBOM CycloneDX 1.5 tanpa scan vulnerability
+- [x] Support `--format spdx` sebagai alternatif output
 
 ### Test
 
-- [ ] Test pipeline SCA end-to-end menggunakan repository fixture Go kecil yang sudah diketahui mengandung CVE
-- [ ] Test bahwa grype tidak berjalan jika syft gagal (tidak ada SBOM)
-- [ ] Test flag `--mode sca` hanya menjalankan syft dan grype
+- [x] Test pipeline SCA end-to-end menggunakan repository fixture Go kecil yang sudah diketahui mengandung CVE
+- [x] Test bahwa grype tidak berjalan jika syft gagal (tidak ada SBOM)
+- [x] Test flag `--mode sca` hanya menjalankan syft dan grype
 
 ---
 
 ## v0.4 — SAST Pipeline Berfungsi Penuh
 
-**Tujuan:** `aspm-cli scan --mode sast` menghasilkan temuan code vulnerability dan secret dari repositori nyata.
+**Tujuan:** `supplychain-kit scan --mode sast` menghasilkan temuan code vulnerability dan secret dari repositori nyata.
 
 ### Semgrep Integration
 
@@ -79,7 +79,7 @@ Saat ini syft dan grype berjalan secara concurrent, padahal grype membutuhkan SB
 
 ### Output Gabungan SCA + SAST
 
-- [ ] `aspm-cli scan --mode all` menampilkan ringkasan gabungan:
+- [ ] `supplychain-kit scan --mode all` menampilkan ringkasan gabungan:
   - Bagian SCA: dependency vulnerabilities
   - Bagian SAST: code findings
   - Bagian Secrets: secret findings
@@ -99,7 +99,7 @@ Saat ini syft dan grype berjalan secara concurrent, padahal grype membutuhkan SB
 
 ### CLI `gate` Command
 
-- [ ] `aspm-cli gate --findings <file.json>` berjalan penuh (tanpa `--policy` pun ada default)
+- [ ] `supplychain-kit gate --findings <file.json>` berjalan penuh (tanpa `--policy` pun ada default)
 - [ ] Default policy: fail jika ada Critical, warn jika ada High
 - [ ] `--policy <file.yaml>` untuk override policy
 - [ ] Exit code: `0` (pass), `1` (warn), `2` (fail)
@@ -113,7 +113,7 @@ Saat ini syft dan grype berjalan secara concurrent, padahal grype membutuhkan SB
 
 ### Pipeline One-liner
 
-- [ ] `aspm-cli scan --repo . | aspm-cli gate` bisa dipakai tanpa file perantara
+- [ ] `supplychain-kit scan --repo . | supplychain-kit gate` bisa dipakai tanpa file perantara
 - [ ] Contoh GitHub Actions snippet di README
 - [ ] Contoh GitLab CI snippet di README
 
@@ -214,7 +214,7 @@ Saat ini syft dan grype berjalan secara concurrent, padahal grype membutuhkan SB
 
 **Tujuan:** Stabil, terdokumentasi, siap digunakan komunitas.
 
-- [ ] VEX report CSAF 2.0 (`aspm-cli vex --tag v1.0.0`)
+- [ ] VEX report CSAF 2.0 (`supplychain-kit vex --tag v1.0.0`)
 - [ ] Compliance reports: NIST SSDF, SLSA, OWASP SCVS
 - [ ] Full documentation site (GitHub Pages)
 - [ ] Binary release via GitHub Releases (Linux/macOS, amd64/arm64)

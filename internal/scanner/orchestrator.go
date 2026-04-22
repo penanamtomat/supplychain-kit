@@ -97,6 +97,18 @@ func (r *Registry) runTwoPhase(ctx context.Context, req Request) ([]ScannedResul
 	// Inject SBOM path into request so grype finds it without guessing.
 	if sbomPath, ok := artifacts[ArtifactSBOMPath]; ok {
 		req.SBOMPath = sbomPath
+	} else {
+		// syft did not produce an SBOM — remove grype from phase 2 so it
+		// doesn't run against a non-existent file.
+		filtered := phase2[:0]
+		for _, s := range phase2 {
+			if s.Name() == "grype" {
+				log.Warn().Msg("syft did not produce SBOM — skipping grype")
+			} else {
+				filtered = append(filtered, s)
+			}
+		}
+		phase2 = filtered
 	}
 
 	// Phase 2: grype + semgrep + gitleaks + joern — all concurrent.

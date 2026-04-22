@@ -155,7 +155,7 @@ func (h *Handlers) AssetRisk(w http.ResponseWriter, r *http.Request) {
 }
 
 // EvaluateGate runs the quality gate against a supplied finding set (typically
-// produced by `aspm-cli scan` and POSTed during CI).
+// produced by `supplychain-kit scan` and POSTed during CI).
 func (h *Handlers) EvaluateGate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Findings []*models.Finding `json:"findings"`

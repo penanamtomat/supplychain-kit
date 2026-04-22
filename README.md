@@ -47,9 +47,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component diagram and data f
 ```
 .
 ├── cmd/                    # Go binary entry points
-│   ├── aspm-api/           # REST API + dashboards
+│   ├── aspm-api/           # REST API + dashboards (v0.8+)
 │   ├── aspm-scanner/       # Scanner orchestrator (CI worker)
-│   └── aspm-cli/           # Operator CLI (local scans, gate checks)
+│   └── supplychain-kit/    # Operator CLI (local scans, gate checks)
 ├── internal/               # Private Go packages
 │   ├── api/                # HTTP handlers, middleware, routing
 │   ├── config/             # Viper-based configuration
@@ -76,41 +76,143 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component diagram and data f
 ├── configs/                # Sample configuration files
 ├── docs/                   # PRD + design docs
 ├── scripts/                # Bootstrap & developer helpers
-└── tests/                  # End-to-end / integration tests
+└── results/                # Local scan reports (gitignored)
 ```
 
-## Quickstart
+## Installation
 
-### Prerequisites
-
-- Docker + Docker Compose (or Podman)
-- Go 1.22+ and Python 3.11+ (only if building from source)
-- The following CLIs available on `PATH` for the scanner adapters: `syft`, `grype`, `semgrep`, `gitleaks`. The orchestrator falls back to containerized invocations when absent.
-
-### Local stack (recommended)
+### One-liner (Linux / macOS / Windows Git Bash)
 
 ```bash
-# 1. Bring up Postgres, Redis, the API, the scanner worker, and the remediation service
-docker compose -f deployments/docker/docker-compose.yml up -d
-
-# 2. Run database migrations
-make migrate
-
-# 3. Trigger an end-to-end scan against a target repository
-./bin/aspm-cli scan --repo https://github.com/OWASP/NodeGoat --tag demo
-
-# 4. Open the API
-curl http://localhost:8080/api/v1/findings | jq
+bash install.sh
 ```
 
-### Build from source
+This script will:
+1. Check prerequisites (`go`, `git`, `curl`)
+2. Install scanner tools: `syft`, `grype`, `gitleaks`, `semgrep`
+3. Build `supplychain-kit` from source
+4. Install the binary to `~/.local/bin` (or `/usr/local/bin` on macOS)
+
+**Options:**
 
 ```bash
-make build           # Builds all Go binaries into ./bin
-make python-deps     # Creates a virtualenv for the remediation layer
-make test            # Runs unit tests for both Go and Python sides
-make lint            # golangci-lint + ruff
+bash install.sh --no-semgrep           # skip semgrep (no Python required)
+bash install.sh --prefix /usr/local    # custom install directory
+INSTALL_DIR=/opt/aspm bash install.sh  # via environment variable
 ```
+
+### Build from source manually
+
+Requires Go 1.22+.
+
+```bash
+git clone https://github.com/penanamtomat/supplychain-kit
+cd supplychain-kit
+go build -o bin/supplychain-kit ./cmd/supplychain-kit
+```
+
+### Uninstall
+
+```bash
+bash uninstall.sh           # remove supplychain-kit binary only
+bash uninstall.sh --tools   # also remove syft, grype, gitleaks, semgrep
+```
+
+---
+
+## Usage
+
+### Scan a local repository
+
+```bash
+# Supply chain scan (syft → grype): dependency vulnerabilities
+supplychain-kit scan --repo /path/to/project --mode sca
+
+# SAST scan (semgrep + gitleaks): code issues and secrets
+supplychain-kit scan --repo /path/to/project --mode sast
+
+# Full scan: all scanners
+supplychain-kit scan --repo /path/to/project --mode all
+```
+
+### Scan a remote repository (no clone needed)
+
+```bash
+supplychain-kit scan --repo https://github.com/org/repo --mode sca
+supplychain-kit scan --repo https://github.com/org/repo --ref main --mode all
+```
+
+The CLI clones the repository into a temporary directory automatically and removes it after the scan completes.
+
+### Output formats
+
+```bash
+# Human-readable summary to stderr (default)
+supplychain-kit scan --repo . --mode sca
+
+# Table view to stdout
+supplychain-kit scan --repo . --mode sca --format table
+
+# JSON findings to a file
+supplychain-kit scan --repo . --mode sca --format json --out findings.json
+
+# Save all reports (findings.json, findings.txt, summary.json) to results/<name>/
+supplychain-kit scan --repo . --mode all --target myapp
+```
+
+### Generate an SBOM
+
+```bash
+# CycloneDX 1.5 JSON (default)
+supplychain-kit sbom --repo /path/to/project --out sbom.json
+
+# SPDX 2.3 JSON
+supplychain-kit sbom --repo /path/to/project --format spdx --out sbom.spdx.json
+
+# Save to results/<name>/sbom.json
+supplychain-kit sbom --repo /path/to/project --target myapp
+```
+
+### Quality Gate
+
+Evaluate a finding set against a policy and get a structured exit code:
+
+```bash
+supplychain-kit scan --repo . --out findings.json
+supplychain-kit gate --findings findings.json
+# exit 0 → pass, exit 1 → warn (High findings), exit 2 → fail (Critical findings)
+```
+
+Or pipe directly without an intermediate file:
+
+```bash
+supplychain-kit scan --repo . --format json | supplychain-kit gate
+```
+
+**Custom policy** (`--policy configs/aspm.yaml`):
+
+```yaml
+quality_gate:
+  fail_on:
+    - severity: critical
+    - severity: high
+      max_count: 0
+  warn_on:
+    - severity: medium
+```
+
+### CI integration (GitHub Actions)
+
+```yaml
+- name: Scan dependencies
+  run: |
+    supplychain-kit scan --repo . --mode sca --out findings.json
+    supplychain-kit gate --findings findings.json --policy configs/aspm.yaml
+```
+
+Exit code `2` (Critical) will fail the workflow; exit code `1` (High) will fail unless you add `continue-on-error: true`.
+
+---
 
 ## Configuration
 
@@ -120,27 +222,13 @@ Key environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `ASPM_DB_DSN` | Postgres connection string |
-| `ASPM_REDIS_URL` | Redis URL for the scan queue |
-| `ASPM_LLM_PROVIDER` | `anthropic` or `openai` for the remediation agent |
-| `ASPM_LLM_API_KEY` | API key for the chosen provider |
-| `ASPM_GITHUB_TOKEN` | Token used to open remediation PRs |
+| `ASPM_DB_DSN` | Postgres connection string (required in server mode, v0.8+) |
+| `ASPM_REDIS_URL` | Redis URL for the scan queue (v0.8+) |
+| `ASPM_LLM_PROVIDER` | `anthropic` or `openai` for the remediation agent (v0.9+) |
+| `ASPM_LLM_API_KEY` | API key for the chosen provider (v0.9+) |
+| `ASPM_GITHUB_TOKEN` | Token used to open remediation PRs (v0.9+) |
 
-## Quality Gates
-
-CI integrations call `aspm-cli gate` after a scan finishes. The exit code is non-zero whenever a finding crosses the configured policy. A typical policy:
-
-```yaml
-quality_gate:
-  fail_on:
-    - severity: critical
-      reachable: true
-    - severity: high
-      reachable: true
-      max_count: 0
-  warn_on:
-    - severity: medium
-```
+> **Note:** Database and Redis are not required in standalone CLI mode (current phase). They are introduced in v0.8.
 
 ## Roadmap
 

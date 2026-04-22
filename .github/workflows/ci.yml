@@ -36,9 +36,9 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
           pipx install semgrep
-      - name: Build aspm-cli
-        run: go build -o bin/aspm-cli ./cmd/aspm-cli
+      - name: Build supplychain-kit
+        run: go build -o bin/supplychain-kit ./cmd/supplychain-kit
       - name: Self-scan + Quality Gate
         run: |
-          ./bin/aspm-cli scan --repo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --ref "$GITHUB_SHA" --out findings.json
-          ./bin/aspm-cli gate --findings findings.json --policy configs/aspm.yaml
+          ./bin/supplychain-kit scan --repo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --ref "$GITHUB_SHA" --out findings.json
+          ./bin/supplychain-kit gate --findings findings.json --policy configs/aspm.yaml

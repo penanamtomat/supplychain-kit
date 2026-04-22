@@ -18,7 +18,9 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
 )
 
-const ArtifactSBOMPath = "sbom_path"
+// ArtifactSBOMPath re-exports the canonical key from the parent scanner package
+// so callers that only import this subpackage can still reference it.
+const ArtifactSBOMPath = scanner.ArtifactSBOMPath
 
 // Adapter is the syft scanner adapter.
 type Adapter struct {
@@ -28,6 +30,9 @@ type Adapter struct {
 // New returns a new syft Adapter.
 func New() *Adapter { return &Adapter{binary: "syft"} }
 
+// NewWithBinary returns an Adapter using the supplied binary path — useful in tests.
+func NewWithBinary(bin string) *Adapter { return &Adapter{binary: bin} }
+
 func (a *Adapter) Name() string                  { return "syft" }
 func (a *Adapter) Source() models.FindingSource { return models.SourceSyft }
 
@@ -35,6 +40,9 @@ func (a *Adapter) Source() models.FindingSource { return models.SourceSyft }
 // scanner's working directory. Findings list is empty (syft is informational).
 func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result, error) {
 	out := scanner.Result{Source: a.Source(), Artifacts: map[string]string{}}
+	if err := scanner.CheckBinary(a.binary); err != nil {
+		return out, err
+	}
 
 	sbomPath := filepath.Join(req.CheckoutDir, ".aspm", "sbom.cdx.json")
 	if err := os.MkdirAll(filepath.Dir(sbomPath), 0o755); err != nil {

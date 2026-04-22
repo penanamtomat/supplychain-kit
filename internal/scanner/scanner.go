@@ -28,6 +28,12 @@ type Result struct {
 	Artifacts map[string]string
 }
 
+// Artifact keys written into Result.Artifacts by adapters.
+const (
+	ArtifactSBOMPath = "sbom_path" // path to CycloneDX JSON written by syft
+	ArtifactCPGPath  = "cpg_path"  // path to Joern CPG export directory
+)
+
 // Scanner is the universal adapter contract.
 type Scanner interface {
 	Name() string

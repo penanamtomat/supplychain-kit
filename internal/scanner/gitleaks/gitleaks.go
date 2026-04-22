@@ -25,11 +25,17 @@ type Adapter struct{ binary string }
 // New returns a new gitleaks Adapter.
 func New() *Adapter { return &Adapter{binary: "gitleaks"} }
 
+// NewWithBinary returns an Adapter using the supplied binary path — useful in tests.
+func NewWithBinary(bin string) *Adapter { return &Adapter{binary: bin} }
+
 func (a *Adapter) Name() string                  { return "gitleaks" }
 func (a *Adapter) Source() models.FindingSource { return models.SourceGitleaks }
 
 func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result, error) {
 	out := scanner.Result{Source: a.Source()}
+	if err := scanner.CheckBinary(a.binary); err != nil {
+		return out, err
+	}
 
 	report := filepath.Join(req.CheckoutDir, ".aspm", "gitleaks.json")
 	if err := os.MkdirAll(filepath.Dir(report), 0o755); err != nil {
@@ -47,19 +53,29 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 	if err != nil {
 		return out, err
 	}
+	findings, err := ParseReport(raw, req.AssetID, req.ScanRunID)
+	if err != nil {
+		return out, err
+	}
+	out.Findings = findings
+	return out, nil
+}
+
+// ParseReport converts raw gitleaks JSON output into Finding records.
+func ParseReport(raw []byte, assetID, scanRunID string) ([]*models.Finding, error) {
 	var leaks []gitleakLeak
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &leaks); err != nil {
-			return out, err
+			return nil, err
 		}
 	}
-
 	now := time.Now().UTC()
+	out := make([]*models.Finding, 0, len(leaks))
 	for _, l := range leaks {
 		f := &models.Finding{
 			ID:          uuid.NewString(),
-			AssetID:     req.AssetID,
-			ScanRunID:   req.ScanRunID,
+			AssetID:     assetID,
+			ScanRunID:   scanRunID,
 			Sources:     []models.FindingSource{models.SourceGitleaks},
 			RuleID:      "gitleaks." + l.RuleID,
 			Title:       fmt.Sprintf("Secret detected: %s", l.Description),
@@ -73,7 +89,7 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 			LastSeen:     now,
 		}
 		f.Fingerprint = fingerprint(f)
-		out.Findings = append(out.Findings, f)
+		out = append(out, f)
 	}
 	return out, nil
 }

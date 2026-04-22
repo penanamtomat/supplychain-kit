@@ -1,0 +1,19 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "github.com/gin-gonic/gin",
+      "version": "v1.9.0",
+      "purl": "pkg:golang/github.com/gin-gonic/gin@v1.9.0"
+    },
+    {
+      "type": "library",
+      "name": "golang.org/x/net",
+      "version": "v0.17.0",
+      "purl": "pkg:golang/golang.org/x/net@v0.17.0"
+    }
+  ]
+}

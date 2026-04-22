@@ -30,3 +30,9 @@ Thumbs.db
 *.pem
 .aspm/
 /tmp/
+
+# Scanner runtime outputs
+findings.json
+findings.*.json
+scan-results/
+reports/

@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "check_id": "go.lang.security.audit.dangerous-exec-command.dangerous-exec-command",
+      "path": "internal/runner/runner.go",
+      "start": { "line": 42, "col": 3 },
+      "extra": {
+        "message": "Detected non-static command inside exec.Command. This could lead to command injection if the variable is user-controlled.",
+        "severity": "ERROR"
+      }
+    },
+    {
+      "check_id": "go.lang.security.audit.net.unescaped-data-in-url.unescaped-data-in-url",
+      "path": "internal/api/handler.go",
+      "start": { "line": 88, "col": 15 },
+      "extra": {
+        "message": "Detected unescaped user input used in URL. This could lead to open redirect.",
+        "severity": "WARNING"
+      }
+    }
+  ],
+  "errors": []
+}

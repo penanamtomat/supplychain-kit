@@ -16,7 +16,6 @@ import (
 
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
-	syftadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/syft"
 )
 
 // Adapter wraps the grype CLI.
@@ -27,6 +26,9 @@ type Adapter struct {
 // New returns a new Grype Adapter.
 func New() *Adapter { return &Adapter{binary: "grype"} }
 
+// NewWithBinary returns an Adapter using the supplied binary path — useful in tests.
+func NewWithBinary(bin string) *Adapter { return &Adapter{binary: bin} }
+
 func (a *Adapter) Name() string                  { return "grype" }
 func (a *Adapter) Source() models.FindingSource { return models.SourceGrype }
 
@@ -34,6 +36,9 @@ func (a *Adapter) Source() models.FindingSource { return models.SourceGrype }
 // preceding step) and parses grype's JSON output into Finding records.
 func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result, error) {
 	out := scanner.Result{Source: a.Source()}
+	if err := scanner.CheckBinary(a.binary); err != nil {
+		return out, err
+	}
 
 	sbom := req.SBOMPath
 	if sbom == "" {
@@ -46,17 +51,29 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 		return out, fmt.Errorf("grype: %w", err)
 	}
 
-	var report grypeReport
-	if err := json.Unmarshal(stdout, &report); err != nil {
-		return out, fmt.Errorf("parse grype json: %w", err)
+	findings, err := ParseReport(stdout, req.AssetID, req.ScanRunID)
+	if err != nil {
+		return out, err
 	}
+	out.Findings = findings
+	out.Artifacts = map[string]string{scanner.ArtifactSBOMPath: sbom}
+	return out, nil
+}
 
+// ParseReport converts raw grype JSON output into Finding records.
+// Extracted so tests can exercise parsing logic without invoking the binary.
+func ParseReport(raw []byte, assetID, scanRunID string) ([]*models.Finding, error) {
+	var report grypeReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return nil, fmt.Errorf("parse grype json: %w", err)
+	}
 	now := time.Now().UTC()
+	out := make([]*models.Finding, 0, len(report.Matches))
 	for _, m := range report.Matches {
 		f := &models.Finding{
 			ID:           uuid.NewString(),
-			AssetID:      req.AssetID,
-			ScanRunID:    req.ScanRunID,
+			AssetID:      assetID,
+			ScanRunID:    scanRunID,
 			Sources:      []models.FindingSource{models.SourceGrype},
 			RuleID:       m.Vulnerability.ID,
 			Title:        fmt.Sprintf("%s in %s@%s", m.Vulnerability.ID, m.Artifact.Name, m.Artifact.Version),
@@ -71,12 +88,8 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 			LastSeen:     now,
 		}
 		f.Fingerprint = fingerprint(f)
-		out.Findings = append(out.Findings, f)
+		out = append(out, f)
 	}
-
-	// Make the SBOM artifact discoverable for downstream stages even when
-	// grype is invoked standalone (e.g., in `aspm-cli scan-sbom`).
-	out.Artifacts = map[string]string{syftadapter.ArtifactSBOMPath: sbom}
 	return out, nil
 }
 

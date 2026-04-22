@@ -33,7 +33,11 @@ func (r *Registry) RunAll(ctx context.Context, req Request) []ScannedResult {
 			defer wg.Done()
 			res, err := s.Scan(ctx, req)
 			if err != nil {
-				log.Warn().Err(err).Str("scanner", s.Name()).Msg("scanner failed")
+				if _, notFound := err.(ErrBinaryNotFound); notFound {
+					log.Warn().Str("scanner", s.Name()).Msg(err.Error())
+				} else {
+					log.Warn().Err(err).Str("scanner", s.Name()).Msg("scanner failed")
+				}
 			}
 			mu.Lock()
 			results = append(results, ScannedResult{Scanner: s.Name(), Result: res, Err: err})

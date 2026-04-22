@@ -18,7 +18,8 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
 )
 
-const ArtifactCPGPath = "cpg_path"
+// ArtifactCPGPath re-exports the canonical key from the parent scanner package.
+const ArtifactCPGPath = scanner.ArtifactCPGPath
 
 // Adapter wraps the joern-parse + joern-export CLI pipeline.
 type Adapter struct {
@@ -31,11 +32,19 @@ func New() *Adapter {
 	return &Adapter{parseBinary: "joern-parse", exportBinary: "joern-export"}
 }
 
+// NewWithBinary returns an Adapter using the supplied binary paths — useful in tests.
+func NewWithBinary(parse, export string) *Adapter {
+	return &Adapter{parseBinary: parse, exportBinary: export}
+}
+
 func (a *Adapter) Name() string                  { return "joern" }
 func (a *Adapter) Source() models.FindingSource { return models.SourceJoern }
 
 func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result, error) {
 	out := scanner.Result{Source: a.Source(), Artifacts: map[string]string{}}
+	if err := scanner.CheckBinary(a.parseBinary); err != nil {
+		return out, err
+	}
 
 	cpgBin := filepath.Join(req.CheckoutDir, ".aspm", "cpg.bin")
 	cpgExport := filepath.Join(req.CheckoutDir, ".aspm", "cpg-export")
@@ -55,6 +64,6 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 		return out, fmt.Errorf("joern-export: %w", err)
 	}
 
-	out.Artifacts[ArtifactCPGPath] = cpgExport
+	out.Artifacts[scanner.ArtifactCPGPath] = cpgExport
 	return out, nil
 }

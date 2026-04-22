@@ -1,0 +1,22 @@
+[
+  {
+    "Description": "AWS Access Token",
+    "StartLine": 12,
+    "EndLine": 12,
+    "StartColumn": 1,
+    "EndColumn": 40,
+    "Match": "AKIA··················EXAMPLE",
+    "Secret": "AKIAIOSFODNN7EXAMPLE",
+    "File": "config/deploy.yaml",
+    "SymlinkFile": "",
+    "Commit": "",
+    "Entropy": 3.8,
+    "Author": "",
+    "Email": "",
+    "Date": "",
+    "Message": "",
+    "Tags": [],
+    "RuleID": "aws-access-token",
+    "Fingerprint": "config/deploy.yaml:aws-access-token:12"
+  }
+]

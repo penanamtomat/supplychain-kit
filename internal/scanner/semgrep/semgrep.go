@@ -27,6 +27,9 @@ type Adapter struct {
 // New returns an Adapter that loads the OWASP top-ten rule pack by default.
 func New() *Adapter { return &Adapter{binary: "semgrep", config: "p/owasp-top-ten"} }
 
+// NewWithBinary returns an Adapter using the supplied binary path — useful in tests.
+func NewWithBinary(bin string) *Adapter { return &Adapter{binary: bin, config: "p/owasp-top-ten"} }
+
 // WithConfig overrides the rule pack used at scan time.
 func (a *Adapter) WithConfig(cfg string) *Adapter { a.config = cfg; return a }
 
@@ -36,6 +39,9 @@ func (a *Adapter) Source() models.FindingSource { return models.SourceSemgrep }
 // Scan runs `semgrep --json` against the checkout directory.
 func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result, error) {
 	out := scanner.Result{Source: a.Source()}
+	if err := scanner.CheckBinary(a.binary); err != nil {
+		return out, err
+	}
 
 	cmd := exec.CommandContext(ctx, a.binary, "--config", a.config, "--json", "--quiet", req.CheckoutDir)
 	stdout, err := cmd.Output()
@@ -47,30 +53,40 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 		}
 	}
 
-	var report semgrepReport
-	if err := json.Unmarshal(stdout, &report); err != nil {
-		return out, fmt.Errorf("parse semgrep json: %w", err)
+	findings, err := ParseReport(stdout, req.AssetID, req.ScanRunID, req.CheckoutDir)
+	if err != nil {
+		return out, err
 	}
+	out.Findings = findings
+	return out, nil
+}
 
+// ParseReport converts raw semgrep JSON output into Finding records.
+func ParseReport(raw []byte, assetID, scanRunID, checkoutDir string) ([]*models.Finding, error) {
+	var report semgrepReport
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return nil, fmt.Errorf("parse semgrep json: %w", err)
+	}
 	now := time.Now().UTC()
+	out := make([]*models.Finding, 0, len(report.Results))
 	for _, r := range report.Results {
 		f := &models.Finding{
-			ID:          uuid.NewString(),
-			AssetID:     req.AssetID,
-			ScanRunID:   req.ScanRunID,
-			Sources:     []models.FindingSource{models.SourceSemgrep},
-			RuleID:      r.CheckID,
-			Title:       firstLine(r.Extra.Message),
-			Description: r.Extra.Message,
-			Severity:    mapSeverity(r.Extra.Severity),
-			FilePath:    relPath(req.CheckoutDir, r.Path),
-			Line:        r.Start.Line,
+			ID:           uuid.NewString(),
+			AssetID:      assetID,
+			ScanRunID:    scanRunID,
+			Sources:      []models.FindingSource{models.SourceSemgrep},
+			RuleID:       r.CheckID,
+			Title:        firstLine(r.Extra.Message),
+			Description:  r.Extra.Message,
+			Severity:     mapSeverity(r.Extra.Severity),
+			FilePath:     relPath(checkoutDir, r.Path),
+			Line:         r.Start.Line,
 			Reachability: models.ReachUnknown,
 			FirstSeen:    now,
 			LastSeen:     now,
 		}
 		f.Fingerprint = fingerprint(f)
-		out.Findings = append(out.Findings, f)
+		out = append(out, f)
 	}
 	return out, nil
 }

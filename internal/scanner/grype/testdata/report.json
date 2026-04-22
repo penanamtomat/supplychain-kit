@@ -1,0 +1,48 @@
+{
+  "matches": [
+    {
+      "vulnerability": {
+        "id": "CVE-2023-29400",
+        "severity": "Critical",
+        "description": "Templates containing actions in unquoted HTML attributes may allow injection of arbitrary values.",
+        "cvss": [
+          {
+            "version": "3.1",
+            "metrics": { "baseScore": 9.8 }
+          }
+        ],
+        "fix": {
+          "versions": ["1.20.5"],
+          "state": "fixed"
+        }
+      },
+      "artifact": {
+        "name": "golang.org/x/net",
+        "version": "v0.17.0",
+        "purl": "pkg:golang/golang.org/x/net@v0.17.0"
+      }
+    },
+    {
+      "vulnerability": {
+        "id": "CVE-2023-44487",
+        "severity": "High",
+        "description": "HTTP/2 Rapid Reset Attack.",
+        "cvss": [
+          {
+            "version": "3.1",
+            "metrics": { "baseScore": 7.5 }
+          }
+        ],
+        "fix": {
+          "versions": ["v0.18.0"],
+          "state": "fixed"
+        }
+      },
+      "artifact": {
+        "name": "golang.org/x/net",
+        "version": "v0.17.0",
+        "purl": "pkg:golang/golang.org/x/net@v0.17.0"
+      }
+    }
+  ]
+}

@@ -36,4 +36,5 @@ findings.json
 findings.*.json
 scan-results/
 reports/
-results/
+results/*
+!results/.gitkeep

@@ -71,7 +71,7 @@ func (ag *Agent) Analyse(ctx context.Context, req SnippetRequest) ([]*models.Fin
 	if err != nil {
 		return nil, fmt.Errorf("agenticsast: create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	snippetFile := filepath.Join(tmpDir, "snippet."+lang)
 	if err := os.WriteFile(snippetFile, []byte(req.Code), 0600); err != nil {
@@ -122,7 +122,7 @@ func (ag *Agent) Handler() http.HandlerFunc {
 
 func snippetFingerprint(code, ruleID string, line int) string {
 	h := sha1.New()
-	fmt.Fprintf(h, "%s|%s|%d", ruleID, code, line)
+	_, _ = fmt.Fprintf(h, "%s|%s|%d", ruleID, code, line)
 	return hex.EncodeToString(h.Sum(nil))
 }
 

@@ -139,7 +139,7 @@ func (c *Client) do(req *http.Request, out any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("dependency-track: status %d for %s %s", resp.StatusCode, req.Method, req.URL.Path)
 	}

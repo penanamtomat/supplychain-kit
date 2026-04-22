@@ -236,7 +236,7 @@ func proxyRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, u
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)

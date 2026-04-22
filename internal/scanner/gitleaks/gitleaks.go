@@ -88,6 +88,6 @@ type gitleakLeak struct {
 
 func fingerprint(f *models.Finding) string {
 	h := sha1.New()
-	fmt.Fprintf(h, "%s|%s|%d", f.RuleID, f.FilePath, f.Line)
+	_, _ = fmt.Fprintf(h, "%s|%s|%d", f.RuleID, f.FilePath, f.Line)
 	return hex.EncodeToString(h.Sum(nil))
 }

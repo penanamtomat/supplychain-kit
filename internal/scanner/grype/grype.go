@@ -144,6 +144,6 @@ func pickFixVersion(f grypeFix) string {
 
 func fingerprint(f *models.Finding) string {
 	h := sha1.New()
-	fmt.Fprintf(h, "%s|%s|%s|%s|%d", f.RuleID, f.Package, f.Version, f.FilePath, f.Line)
+	_, _ = fmt.Fprintf(h, "%s|%s|%s|%s|%d", f.RuleID, f.Package, f.Version, f.FilePath, f.Line)
 	return hex.EncodeToString(h.Sum(nil))
 }

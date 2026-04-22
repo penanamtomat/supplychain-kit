@@ -121,7 +121,7 @@ func submitCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			fmt.Println(resp.Status)
 			return nil
 		},
@@ -138,7 +138,7 @@ func writeFindings(path string, fs []*models.Finding) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		w = f
 	}
 	enc := json.NewEncoder(w)
@@ -153,7 +153,7 @@ func readFindings(path string) ([]*models.Finding, error) {
 		if err != nil {
 			return nil, err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		r = f
 	}
 	var out []*models.Finding

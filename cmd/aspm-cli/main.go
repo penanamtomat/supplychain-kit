@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -43,6 +44,7 @@ func scanCmd() *cobra.Command {
 		out    string
 		mode   string
 		format string
+		target string
 	)
 	cmd := &cobra.Command{
 		Use:   "scan",
@@ -56,7 +58,12 @@ Modes:
 
 Formats:
   json  Full findings as JSON (default when --out is set)
-  table Human-readable table to stdout`,
+  table Human-readable table to stdout
+
+Target:
+  --target <name>  Save all outputs to results/<name>/ directory.
+                   If omitted and --repo is a local path, the directory
+                   name of the repo is used as target.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if repo == "" {
 				return fmt.Errorf("--repo required")
@@ -105,6 +112,17 @@ Formats:
 
 			printSummary(merged)
 
+			// Target mode: write all reports to results/<target>/
+			if target != "" {
+				targetDir := resolveTargetDir(target)
+				if err := os.MkdirAll(targetDir, 0o755); err != nil {
+					return fmt.Errorf("create target dir: %w", err)
+				}
+				writeTargetReports(targetDir, merged, repo, mode)
+				fmt.Fprintf(os.Stderr, "  Reports saved to %s/\n\n", targetDir)
+				return nil
+			}
+
 			if format == "table" {
 				return printTable(merged)
 			}
@@ -112,7 +130,6 @@ Formats:
 			if out != "" || format == "json" {
 				return writeFindings(out, merged)
 			}
-			// Nothing else requested — summary already printed.
 			return nil
 		},
 	}
@@ -121,7 +138,81 @@ Formats:
 	cmd.Flags().StringVar(&out, "out", "", "write JSON findings to file (- for stdout)")
 	cmd.Flags().StringVar(&mode, "mode", "all", "scanner mode: sca, sast, all")
 	cmd.Flags().StringVar(&format, "format", "", "output format: json, table")
+	cmd.Flags().StringVar(&target, "target", "", "target name — saves reports to results/<target>/")
 	return cmd
+}
+
+// resolveTargetDir returns the absolute path to results/<target>.
+func resolveTargetDir(target string) string {
+	if target == "" {
+		return "results"
+	}
+	return filepath.Join("results", target)
+}
+
+// inferTargetName extracts a target name from a repo path or URL.
+func inferTargetName(repo string) string {
+	if isLocalPath(repo) {
+		return filepath.Base(repo)
+	}
+	// From URL like https://github.com/org/repo.git → repo
+	parts := strings.Split(strings.TrimSuffix(repo, ".git"), "/")
+	return parts[len(parts)-1]
+}
+
+// writeTargetReports writes findings.json, findings.txt, and summary.json
+// into the target directory.
+func writeTargetReports(dir string, findings []*models.Finding, repo, mode string) {
+	_ = writeFindings(filepath.Join(dir, "findings.json"), findings)
+
+	f, err := os.Create(filepath.Join(dir, "findings.txt"))
+	if err == nil {
+		writeTableTo(f, findings)
+		f.Close()
+	}
+
+	counts := map[string]int{}
+	for _, f := range findings {
+		counts[strings.ToUpper(string(f.Severity))]++
+	}
+	summary := map[string]interface{}{
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"target":    filepath.Base(dir),
+		"repo":      repo,
+		"mode":      mode,
+		"total":     len(findings),
+		"severity":  counts,
+	}
+	raw, _ := json.MarshalIndent(summary, "", "  ")
+	_ = os.WriteFile(filepath.Join(dir, "summary.json"), raw, 0o644)
+}
+
+// writeTableTo writes a human-readable table to any io.Writer.
+func writeTableTo(w *os.File, findings []*models.Finding) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE")
+	fmt.Fprintln(tw, "--------\t----------\t-------\t---\t----")
+	for _, f := range findings {
+		pkg := f.Package
+		if pkg == "" {
+			pkg = "-"
+		}
+		fix := f.FixedVersion
+		if fix == "" {
+			fix = "-"
+		}
+		loc := f.FilePath
+		if loc == "" {
+			loc = "-"
+		} else if f.Line > 0 {
+			loc = fmt.Sprintf("%s:%d", loc, f.Line)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			strings.ToUpper(string(f.Severity)),
+			f.RuleID, pkg, fix, loc,
+		)
+	}
+	tw.Flush()
 }
 
 // buildRegistry returns a Registry populated according to the requested mode.
@@ -157,7 +248,7 @@ func printSummary(findings []*models.Finding) {
 			fmt.Fprintf(os.Stderr, "  %-10s : %d\n", strings.ToUpper(string(sev)), n)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
+	fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n")
 }
 
 // printTable writes a human-readable table of findings to stdout.
@@ -247,8 +338,9 @@ func submitCmd() *cobra.Command {
 
 func sbomCmd() *cobra.Command {
 	var (
-		repo string
-		out  string
+		repo   string
+		out    string
+		target string
 	)
 	cmd := &cobra.Command{
 		Use:   "sbom",
@@ -277,15 +369,33 @@ func sbomCmd() *cobra.Command {
 				defer cleanup()
 			}
 
-			// Find the SBOM artifact path from results.
 			for _, r := range results {
 				if sbomPath, ok := r.Result.Artifacts[scanner.ArtifactSBOMPath]; ok {
 					raw, err := os.ReadFile(sbomPath)
 					if err != nil {
 						return err
 					}
+
+					// Target mode: save to results/<target>/sbom.json
+					if target != "" {
+						targetDir := resolveTargetDir(target)
+						if err := os.MkdirAll(targetDir, 0o755); err != nil {
+							return fmt.Errorf("create target dir: %w", err)
+						}
+						dest := filepath.Join(targetDir, "sbom.json")
+						if err := os.WriteFile(dest, raw, 0o644); err != nil {
+							return err
+						}
+						fmt.Fprintf(os.Stderr, "SBOM saved to %s\n", dest)
+						return nil
+					}
+
+					// Default: write to --out or stdout
 					w := os.Stdout
 					if out != "" && out != "-" {
+						if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+							return err
+						}
 						f, err := os.Create(out)
 						if err != nil {
 							return err
@@ -302,6 +412,7 @@ func sbomCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "local path or git repository URL")
 	cmd.Flags().StringVar(&out, "out", "-", "output file (- for stdout)")
+	cmd.Flags().StringVar(&target, "target", "", "target name — saves SBOM to results/<target>/sbom.json")
 	return cmd
 }
 
@@ -319,6 +430,9 @@ func isLocalPath(repo string) bool {
 func writeFindings(path string, fs []*models.Finding) error {
 	w := os.Stdout
 	if path != "" && path != "-" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
 		f, err := os.Create(path)
 		if err != nil {
 			return err

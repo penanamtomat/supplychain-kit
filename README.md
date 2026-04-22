@@ -1,8 +1,8 @@
-# Integrated ASPM Platform
+# supplychain-kit
 
-> An open Application Security Posture Management (ASPM) platform that unifies SAST, SCA, secret scanning, reachability analysis, and AI-driven remediation into a single, risk-aware control plane.
+> An open-source CLI tool for Application Security Posture Management (ASPM) — unifies SCA, SAST, secret scanning, reachability analysis, and AI-driven remediation into a single, risk-aware control plane. Runs locally or in CI pipelines with no external services required.
 
-This project is the reference implementation of the ASPM platform described in [docs/Product Requirements Document (PRD)_ Integrated Application Security Posture Management (ASPM) Platform.md](docs/Product%20Requirements%20Document%20%28PRD%29_%20Integrated%20Application%20Security%20Posture%20Management%20%28ASPM%29%20Platform.md). It moves security teams from siloed scanning to a cohesive, prioritized risk model that scales with AI-accelerated development.
+`supplychain-kit` is the reference implementation of the ASPM platform described in [docs/Product Requirements Document (PRD)_ Integrated Application Security Posture Management (ASPM) Platform.md](docs/Product%20Requirements%20Document%20%28PRD%29_%20Integrated%20Application%20Security%20Posture%20Management%20%28ASPM%29%20Platform.md). It moves security teams from siloed scanning to a cohesive, prioritized risk model that scales with AI-accelerated development.
 
 ---
 

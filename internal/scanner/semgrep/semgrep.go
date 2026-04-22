@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 	}
 
 	cmd := exec.CommandContext(ctx, a.binary, "--config", a.config, "--json", "--quiet", req.CheckoutDir)
+	cmd.Stderr = os.Stderr
 	stdout, err := cmd.Output()
 	if err != nil {
 		// Semgrep returns non-zero when findings exist; treat exit error 1

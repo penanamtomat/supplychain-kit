@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -46,6 +47,7 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 	}
 
 	cmd := exec.CommandContext(ctx, a.binary, "sbom:"+sbom, "-o", "json", "--quiet")
+	cmd.Stderr = os.Stderr
 	stdout, err := cmd.Output()
 	if err != nil {
 		return out, fmt.Errorf("grype: %w", err)

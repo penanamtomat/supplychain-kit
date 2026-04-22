@@ -81,34 +81,38 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component diagram and data f
 
 ## Installation
 
-### One-liner (Linux / macOS / Windows Git Bash)
+### Prerequisites
 
-```bash
-bash install.sh
-```
+- [Go 1.22+](https://go.dev/dl) — required to build from source
+- `git` and `curl` — required by the installer
+- Scanner tools (installed automatically by `install.sh`): `syft`, `grype`, `gitleaks`, `semgrep`
 
-This script will:
-1. Check prerequisites (`go`, `git`, `curl`)
-2. Install scanner tools: `syft`, `grype`, `gitleaks`, `semgrep`
-3. Build `supplychain-kit` from source
-4. Install the binary to `~/.local/bin` (or `/usr/local/bin` on macOS)
-
-**Options:**
-
-```bash
-bash install.sh --no-semgrep           # skip semgrep (no Python required)
-bash install.sh --prefix /usr/local    # custom install directory
-INSTALL_DIR=/opt/aspm bash install.sh  # via environment variable
-```
-
-### Build from source manually
-
-Requires Go 1.22+.
+### One-liner installer (Linux / macOS / Windows Git Bash)
 
 ```bash
 git clone https://github.com/penanamtomat/supplychain-kit
 cd supplychain-kit
-go build -o bin/supplychain-kit ./cmd/supplychain-kit
+bash install.sh
+```
+
+The installer will:
+1. Verify `go`, `git`, `curl` are available
+2. Install `syft`, `grype`, `gitleaks`, `semgrep` to `~/.local/bin`
+3. Build and install `supplychain-kit` binary to `~/.local/bin`
+
+**Installer options:**
+
+```bash
+bash install.sh                        # full install (all scanner tools)
+bash install.sh --no-semgrep           # skip semgrep (if Python is not available)
+bash install.sh --prefix /usr/local    # install to a different directory
+```
+
+After installation, reload your shell and verify:
+
+```bash
+source ~/.bashrc          # or: source ~/.zshrc
+supplychain-kit --help
 ```
 
 ### Uninstall
@@ -122,45 +126,95 @@ bash uninstall.sh --tools   # also remove syft, grype, gitleaks, semgrep
 
 ## Usage
 
-### Scan a local repository
+### Quick start — one command, full report
+
+The `run` command is the primary way to use supplychain-kit. It scans a repository, evaluates the quality gate, and generates a full report in one step:
 
 ```bash
-# Supply chain scan (syft → grype): dependency vulnerabilities
-supplychain-kit scan --repo /path/to/project --mode sca
-
-# SAST scan (semgrep + gitleaks): code issues and secrets
-supplychain-kit scan --repo /path/to/project --mode sast
-
-# Full scan: all scanners
-supplychain-kit scan --repo /path/to/project --mode all
+supplychain-kit run <engagement-name> --repo <url-or-path> [--mode sca|sast|all]
 ```
 
-### Scan a remote repository (no clone needed)
+**Examples:**
 
 ```bash
-supplychain-kit scan --repo https://github.com/org/repo --mode sca
-supplychain-kit scan --repo https://github.com/org/repo --ref main --mode all
+# Scan a remote GitHub repository (cloned automatically, deleted after scan)
+supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo
+
+# Scan a local project directory
+supplychain-kit run myapp-2026q1 --repo /path/to/project
+
+# Supply chain only (dependency CVEs)
+supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo --mode sca
+
+# SAST only (code issues + secrets)
+supplychain-kit run myapp-2026q1 --repo /path/to/project --mode sast
+
+# Specific branch or commit
+supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo --ref main
 ```
 
-The CLI clones the repository into a temporary directory automatically and removes it after the scan completes.
+**What happens when you run this command:**
 
-### Output formats
+```
+1. Clone repo (if URL)       → temporary directory, auto-deleted after scan
+2. syft                      → generate SBOM (software bill of materials)
+3. grype                     → match SBOM against CVE database
+4. semgrep + gitleaks        → SAST code scan + secret detection
+5. Quality gate              → evaluate findings against policy
+6. Generate report           → save all output to results/<engagement>/
+```
+
+**Output files** saved to `results/<engagement-name>/`:
+
+| File | Description |
+|---|---|
+| `report.md` | Full markdown report (executive summary + findings table) |
+| `findings.json` | All findings in JSON format (for CI / downstream tools) |
+| `findings.txt` | Findings as a plain-text table |
+| `summary.json` | Counts by severity + metadata |
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | Pass — no policy violations |
+| `1` | Warn — High severity findings present |
+| `2` | Fail — Critical severity findings present |
+
+---
+
+### Manage engagements
+
+Each `run` invocation creates an engagement. Use `engage` to review past scans:
 
 ```bash
-# Human-readable summary to stderr (default)
-supplychain-kit scan --repo . --mode sca
+# List all past engagements
+supplychain-kit engage list
 
-# Table view to stdout
-supplychain-kit scan --repo . --mode sca --format table
-
-# JSON findings to a file
-supplychain-kit scan --repo . --mode sca --format json --out findings.json
-
-# Save all reports (findings.json, findings.txt, summary.json) to results/<name>/
-supplychain-kit scan --repo . --mode all --target myapp
+# Show details of a specific engagement
+supplychain-kit engage status myapp-2026q1
 ```
 
-### Generate an SBOM
+Example output of `engage list`:
+```
+ENGAGEMENT        DATE        TOTAL  CRITICAL  HIGH  MEDIUM  LOW
+myapp-2026q1      2026-04-22  11     0         4     7       0
+myapp-clean       2026-04-21  0      0         0     0       0
+```
+
+---
+
+### Scanner modes
+
+| Mode | Scanners used | What it finds |
+|---|---|---|
+| `sca` | syft → grype | Dependency CVEs (supply chain vulnerabilities) |
+| `sast` | semgrep + gitleaks | Code vulnerabilities + hardcoded secrets |
+| `all` | all of the above | Everything (default) |
+
+---
+
+### Generate SBOM only (no vulnerability scan)
 
 ```bash
 # CycloneDX 1.5 JSON (default)
@@ -173,62 +227,90 @@ supplychain-kit sbom --repo /path/to/project --format spdx --out sbom.spdx.json
 supplychain-kit sbom --repo /path/to/project --target myapp
 ```
 
-### Quality Gate
+---
 
-Evaluate a finding set against a policy and get a structured exit code:
+### Run individual steps manually
+
+If you need more control, each step can be run separately:
 
 ```bash
-supplychain-kit scan --repo . --out findings.json
+# 1. Scan only — output JSON findings
+supplychain-kit scan --repo /path/to/project --mode sca --out findings.json
+
+# 2. Evaluate quality gate from a findings file
 supplychain-kit gate --findings findings.json
-# exit 0 → pass, exit 1 → warn (High findings), exit 2 → fail (Critical findings)
-```
 
-Or pipe directly without an intermediate file:
-
-```bash
+# 3. Pipe scan directly into gate (no intermediate file)
 supplychain-kit scan --repo . --format json | supplychain-kit gate
 ```
 
-**Custom policy** (`--policy configs/aspm.yaml`):
+---
+
+### CI integration (GitHub Actions)
+
+```yaml
+- name: Security scan
+  run: supplychain-kit run ${{ github.event.repository.name }}-${{ github.run_id }} --repo . --mode all
+```
+
+The workflow will fail automatically on Critical findings (exit `2`) or warn on High findings (exit `1`). To allow the workflow to continue even on failures:
+
+```yaml
+- name: Security scan
+  run: supplychain-kit run myapp --repo . --mode sca
+  continue-on-error: true
+```
+
+---
+
+### Policy configuration
+
+The default policy warns on High and fails on Critical. Override with a custom file:
+
+```bash
+supplychain-kit run myapp --repo . --policy configs/aspm.yaml
+```
+
+Policy file format (`configs/aspm.yaml`):
 
 ```yaml
 quality_gate:
   fail_on:
     - severity: critical
     - severity: high
-      max_count: 0
+      max_count: 0   # zero tolerance for High
   warn_on:
     - severity: medium
 ```
 
-### CI integration (GitHub Actions)
+---
 
-```yaml
-- name: Scan dependencies
-  run: |
-    supplychain-kit scan --repo . --mode sca --out findings.json
-    supplychain-kit gate --findings findings.json --policy configs/aspm.yaml
-```
+## Command reference
 
-Exit code `2` (Critical) will fail the workflow; exit code `1` (High) will fail unless you add `continue-on-error: true`.
+| Command | Description |
+|---|---|
+| `supplychain-kit run <name> --repo <url\|path>` | **Full scan + report in one command** (recommended) |
+| `supplychain-kit engage list` | List all past engagements |
+| `supplychain-kit engage status <name>` | Show details of a specific engagement |
+| `supplychain-kit scan --repo <url\|path>` | Run scan only, no report |
+| `supplychain-kit sbom --repo <url\|path>` | Generate SBOM without vulnerability scan |
+| `supplychain-kit gate --findings <file>` | Evaluate findings against quality gate policy |
 
 ---
 
 ## Configuration
 
-Configuration is layered: defaults → `configs/aspm.yaml` → environment variables (prefix `ASPM_`). See [configs/aspm.yaml](configs/aspm.yaml) for the annotated reference.
+Configuration file: `configs/aspm.yaml`. Environment variables use the prefix `ASPM_`.
 
-Key environment variables:
+| Variable | Purpose | Required |
+|---|---|---|
+| `ASPM_DB_DSN` | Postgres connection string | v0.8+ (server mode only) |
+| `ASPM_REDIS_URL` | Redis URL for scan queue | v0.8+ (server mode only) |
+| `ASPM_LLM_PROVIDER` | `anthropic` or `openai` | v0.9+ (AI remediation only) |
+| `ASPM_LLM_API_KEY` | API key for LLM provider | v0.9+ (AI remediation only) |
+| `ASPM_GITHUB_TOKEN` | Token for opening PRs | v0.9+ (AI remediation only) |
 
-| Variable | Purpose |
-| --- | --- |
-| `ASPM_DB_DSN` | Postgres connection string (required in server mode, v0.8+) |
-| `ASPM_REDIS_URL` | Redis URL for the scan queue (v0.8+) |
-| `ASPM_LLM_PROVIDER` | `anthropic` or `openai` for the remediation agent (v0.9+) |
-| `ASPM_LLM_API_KEY` | API key for the chosen provider (v0.9+) |
-| `ASPM_GITHUB_TOKEN` | Token used to open remediation PRs (v0.9+) |
-
-> **Note:** Database and Redis are not required in standalone CLI mode (current phase). They are introduced in v0.8.
+> Database and Redis are **not required** in standalone CLI mode. They are introduced in v0.8 for team/server deployments.
 
 ## Roadmap
 

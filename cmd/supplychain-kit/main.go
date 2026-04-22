@@ -30,8 +30,11 @@ import (
 )
 
 func main() {
-	root := &cobra.Command{Use: "supplychain-kit", Short: "ASPM operator CLI"}
-	root.AddCommand(scanCmd(), gateCmd(), submitCmd(), sbomCmd())
+	root := &cobra.Command{
+		Use:   "supplychain-kit",
+		Short: "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
+	}
+	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -470,4 +473,328 @@ func readFindings(path string) ([]*models.Finding, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// ── run command ───────────────────────────────────────────────────────────────
+
+func runCmd() *cobra.Command {
+	var (
+		repo   string
+		ref    string
+		mode   string
+		policy string
+	)
+	cmd := &cobra.Command{
+		Use:   "run <engagement>",
+		Short: "Scan a repository end-to-end and generate a full report (one command)",
+		Long: `Run a complete security scan and generate a report in one command.
+
+Steps performed automatically:
+  1. Clone repository (if a remote URL is given)
+  2. Run scanner pipeline based on --mode
+  3. Evaluate quality gate against policy
+  4. Generate report files in results/<engagement>/
+
+Output files:
+  results/<engagement>/findings.json   — full findings (machine-readable)
+  results/<engagement>/findings.txt    — findings table (human-readable)
+  results/<engagement>/summary.json    — counts + metadata
+  results/<engagement>/report.md       — full markdown report
+
+Exit codes:
+  0  pass   — no policy violations
+  1  warn   — High findings present
+  2  fail   — Critical findings present
+
+Examples:
+  supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo
+  supplychain-kit run myapp-2026q1 --repo /path/to/project --mode sca
+  supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo --mode sast --ref main
+  supplychain-kit run myapp-2026q1 --repo . --policy configs/policy-strict.yaml`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engagement := args[0]
+
+			targetDir := resolveTargetDir(engagement)
+			if err := os.MkdirAll(targetDir, 0o755); err != nil {
+				return fmt.Errorf("create engagement dir: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "\n── supplychain-kit ───────────────────────\n")
+			fmt.Fprintf(os.Stderr, "  Engagement : %s\n", engagement)
+			fmt.Fprintf(os.Stderr, "  Repository : %s\n", repo)
+			fmt.Fprintf(os.Stderr, "  Mode       : %s\n", mode)
+			fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
+
+			// Step 1 & 2: scan
+			reg := buildRegistry(mode)
+			asset := &models.Asset{
+				ID:          engagement,
+				Name:        repo,
+				Environment: models.EnvDev,
+				Tier:        2,
+			}
+
+			var results []scanner.ScannedResult
+			var cleanup func()
+
+			if isLocalPath(repo) {
+				abs, err := filepath.Abs(repo)
+				if err != nil {
+					return fmt.Errorf("resolve path: %w", err)
+				}
+				asset.Name = abs
+				results, _ = reg.RunLocal(cmd.Context(), asset, abs)
+				cleanup = func() {}
+			} else {
+				asset.RepoURL = repo
+				var artifacts map[string]string
+				var err error
+				results, artifacts, cleanup, err = reg.RunPipeline(cmd.Context(), asset, ref)
+				_ = artifacts
+				if err != nil {
+					return err
+				}
+			}
+			defer cleanup()
+
+			merged := correlation.Merge(results)
+			scorer := scoring.Scorer{}
+			for _, f := range merged {
+				if f.Reachability == "" {
+					f.Reachability = models.ReachUnknown
+				}
+				scorer.Score(f, asset)
+			}
+
+			printSummary(merged)
+
+			// Step 3: save findings + summary
+			writeTargetReports(targetDir, merged, repo, mode)
+
+			// Step 4: quality gate
+			cfg, err := config.Load(policy)
+			if err != nil {
+				return err
+			}
+			gateResult := quality.New(cfg.QualityGate).Evaluate(merged)
+
+			// Step 5: generate markdown report
+			reportPath := filepath.Join(targetDir, "report.md")
+			if err := writeMarkdownReport(reportPath, engagement, repo, mode, merged, gateResult); err != nil {
+				return fmt.Errorf("generate report: %w", err)
+			}
+
+			// Step 6: print results
+			fmt.Fprintf(os.Stderr, "\n── Results saved to %s/ ─────────────────\n", targetDir)
+			fmt.Fprintf(os.Stderr, "  findings.json  — full findings (machine-readable)\n")
+			fmt.Fprintf(os.Stderr, "  findings.txt   — findings table\n")
+			fmt.Fprintf(os.Stderr, "  summary.json   — counts + metadata\n")
+			fmt.Fprintf(os.Stderr, "  report.md      — full markdown report\n")
+			fmt.Fprintf(os.Stderr, "\n  Gate decision  : %s\n", strings.ToUpper(string(gateResult.Decision)))
+			fmt.Fprintf(os.Stderr, "  Gate summary   : %s\n", gateResult.Summary)
+			fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
+
+			switch gateResult.Decision {
+			case quality.DecisionFail:
+				os.Exit(2)
+			case quality.DecisionWarn:
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "local path or remote git URL")
+	cmd.Flags().StringVar(&ref, "ref", "HEAD", "git ref (branch, tag, commit)")
+	cmd.Flags().StringVar(&mode, "mode", "all", "scanner mode: sca, sast, all")
+	cmd.Flags().StringVar(&policy, "policy", "", "policy YAML (default: configs/aspm.yaml)")
+	_ = cmd.MarkFlagRequired("repo")
+	return cmd
+}
+
+// writeMarkdownReport generates a human-readable markdown report.
+func writeMarkdownReport(path, engagement, repo, mode string, findings []*models.Finding, gate quality.Result) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	counts := map[models.Severity]int{}
+	for _, fn := range findings {
+		counts[fn.Severity]++
+	}
+
+	now := time.Now().UTC()
+
+	fmt.Fprintf(f, "# Security Report — %s\n\n", engagement)
+	fmt.Fprintf(f, "| | |\n|---|---|\n")
+	fmt.Fprintf(f, "| **Repository** | `%s` |\n", repo)
+	fmt.Fprintf(f, "| **Scan mode** | `%s` |\n", mode)
+	fmt.Fprintf(f, "| **Date** | %s |\n", now.Format("2006-01-02 15:04 UTC"))
+	fmt.Fprintf(f, "| **Quality gate** | **%s** |\n\n", strings.ToUpper(string(gate.Decision)))
+
+	fmt.Fprintf(f, "## Executive Summary\n\n")
+	fmt.Fprintf(f, "Total findings: **%d**\n\n", len(findings))
+
+	if len(findings) > 0 {
+		fmt.Fprintf(f, "| Severity | Count |\n|---|---|\n")
+		for _, sev := range []models.Severity{
+			models.SeverityCritical, models.SeverityHigh,
+			models.SeverityMedium, models.SeverityLow, models.SeverityInfo,
+		} {
+			if n := counts[sev]; n > 0 {
+				fmt.Fprintf(f, "| %s | %d |\n", strings.ToUpper(string(sev)), n)
+			}
+		}
+		fmt.Fprintf(f, "\n")
+	}
+
+	fmt.Fprintf(f, "## Quality Gate\n\n")
+	fmt.Fprintf(f, "**Decision: %s** — %s\n\n", strings.ToUpper(string(gate.Decision)), gate.Summary)
+
+	if len(findings) == 0 {
+		fmt.Fprintf(f, "## Findings\n\nNo vulnerabilities found.\n")
+		return nil
+	}
+
+	fmt.Fprintf(f, "## Findings\n\n")
+	fmt.Fprintf(f, "| Severity | CVE / Rule | Package | Version | Fix | File |\n")
+	fmt.Fprintf(f, "|---|---|---|---|---|---|\n")
+	for _, fn := range findings {
+		pkg := fn.Package
+		if pkg == "" {
+			pkg = "—"
+		}
+		ver := fn.Version
+		if ver == "" {
+			ver = "—"
+		}
+		fix := fn.FixedVersion
+		if fix == "" {
+			fix = "—"
+		}
+		loc := fn.FilePath
+		if loc == "" {
+			loc = "—"
+		} else if fn.Line > 0 {
+			loc = fmt.Sprintf("%s:%d", loc, fn.Line)
+		}
+		fmt.Fprintf(f, "| %s | `%s` | %s | %s | %s | %s |\n",
+			strings.ToUpper(string(fn.Severity)),
+			fn.RuleID, pkg, ver, fix, loc,
+		)
+	}
+	fmt.Fprintf(f, "\n")
+
+	return nil
+}
+
+// ── engage command ────────────────────────────────────────────────────────────
+
+func engageCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "engage",
+		Short: "Manage scan engagements",
+	}
+	cmd.AddCommand(engageListCmd(), engageStatusCmd())
+	return cmd
+}
+
+func engageListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all past engagements",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			entries, err := os.ReadDir("results")
+			if err != nil || len(entries) == 0 {
+				fmt.Println("No engagements found.")
+				fmt.Println("Run: supplychain-kit run <engagement> --repo <url-or-path>")
+				return nil
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ENGAGEMENT\tDATE\tTOTAL\tCRITICAL\tHIGH\tMEDIUM\tLOW")
+			fmt.Fprintln(w, "----------\t----\t-----\t--------\t----\t------\t---")
+			found := false
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				s := readEngagementSummary(filepath.Join("results", e.Name(), "summary.json"))
+				if s.Timestamp == "" {
+					continue
+				}
+				found = true
+				date := s.Timestamp
+				if len(date) >= 10 {
+					date = date[:10]
+				}
+				fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%d\n",
+					e.Name(), date, s.Total,
+					s.Severity["CRITICAL"], s.Severity["HIGH"],
+					s.Severity["MEDIUM"], s.Severity["LOW"],
+				)
+			}
+			if !found {
+				fmt.Println("No engagements found.")
+				fmt.Println("Run: supplychain-kit run <engagement> --repo <url-or-path>")
+				return nil
+			}
+			return w.Flush()
+		},
+	}
+}
+
+func engageStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status <engagement>",
+		Short: "Show details of a specific engagement",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			dir := filepath.Join("results", name)
+			s := readEngagementSummary(filepath.Join(dir, "summary.json"))
+			if s.Timestamp == "" {
+				return fmt.Errorf("engagement %q not found\nRun: supplychain-kit run %s --repo <url-or-path>", name, name)
+			}
+
+			fmt.Printf("Engagement : %s\n", name)
+			fmt.Printf("Repository : %s\n", s.Repo)
+			fmt.Printf("Mode       : %s\n", s.Mode)
+			fmt.Printf("Date       : %s\n", s.Timestamp)
+			fmt.Printf("Total      : %d findings\n", s.Total)
+			for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"} {
+				if n := s.Severity[sev]; n > 0 {
+					fmt.Printf("  %-10s: %d\n", sev, n)
+				}
+			}
+			fmt.Printf("\nFiles:\n")
+			for _, fname := range []string{"report.md", "findings.json", "findings.txt", "summary.json"} {
+				p := filepath.Join(dir, fname)
+				if _, err := os.Stat(p); err == nil {
+					fmt.Printf("  ✓ %s\n", p)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+type engagementSummary struct {
+	Timestamp string         `json:"timestamp"`
+	Repo      string         `json:"repo"`
+	Mode      string         `json:"mode"`
+	Total     int            `json:"total"`
+	Severity  map[string]int `json:"severity"`
+}
+
+func readEngagementSummary(path string) engagementSummary {
+	var s engagementSummary
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return s
+	}
+	_ = json.Unmarshal(raw, &s)
+	return s
 }

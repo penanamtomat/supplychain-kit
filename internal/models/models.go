@@ -85,8 +85,10 @@ const (
 	SourceSyft     FindingSource = "syft"
 	SourceSemgrep  FindingSource = "semgrep"
 	SourceJoern    FindingSource = "joern"
-	SourceGitleaks FindingSource = "gitleaks"
-	SourceExternal FindingSource = "external"
+	SourceGitleaks    FindingSource = "gitleaks"
+	SourceExternal    FindingSource = "external"
+	SourceTrivy       FindingSource = "trivy"
+	SourceOSVScanner  FindingSource = "osv-scanner"
 )
 
 // Reachability indicates whether the vulnerable code is exercised.

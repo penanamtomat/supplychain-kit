@@ -25,8 +25,10 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/gitleaks"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/grype"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/joern"
+	"github.com/penanamtomat/supplychain-kit/internal/scanner/osvscanner"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/semgrep"
 	syftadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/syft"
+	trivyadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/trivy"
 	"github.com/penanamtomat/supplychain-kit/internal/defectdojo"
 	"github.com/penanamtomat/supplychain-kit/internal/deptrack"
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
@@ -261,12 +263,12 @@ func buildRegistry(mode, semgrepConfig string, gitHistory bool) *scanner.Registr
 	}
 	switch mode {
 	case "sca":
-		return scanner.NewRegistry(syftadapter.New(), grype.New())
+		return scanner.NewRegistry(syftadapter.New(), grype.New(), trivyadapter.New(), osvscanner.New())
 	case "sast":
 		return scanner.NewRegistry(sg, gl)
 	default:
 		return scanner.NewRegistry(
-			syftadapter.New(), grype.New(),
+			syftadapter.New(), grype.New(), trivyadapter.New(), osvscanner.New(),
 			sg, gl,
 			joern.New(),
 		)

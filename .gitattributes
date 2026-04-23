@@ -1,0 +1,6 @@
+# Force LF line endings for shell scripts regardless of OS
+*.sh text eol=lf
+Makefile text eol=lf
+
+# Auto-detect everything else
+* text=auto

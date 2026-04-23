@@ -319,6 +319,31 @@ semgrep_works() {
   semgrep --version >/dev/null 2>&1
 }
 
+# ensure_pip3: try to install pip3 automatically on Linux if missing.
+ensure_pip3() {
+  check pip3 && return 0
+  check pip  && return 0
+  if [ "$OS" != "linux" ]; then return 1; fi
+
+  echo "  pip3 not found — attempting automatic install..."
+  if check apt-get; then
+    apt-get install -y python3-pip >/dev/null 2>&1 && check pip3 && return 0
+  elif check dnf; then
+    dnf install -y python3-pip >/dev/null 2>&1 && check pip3 && return 0
+  elif check yum; then
+    yum install -y python3-pip >/dev/null 2>&1 && check pip3 && return 0
+  elif check apk; then
+    apk add --no-cache py3-pip >/dev/null 2>&1 && check pip3 && return 0
+  fi
+
+  # Fallback: bootstrap pip via ensurepip (available in Python 3.4+).
+  if check python3; then
+    python3 -m ensurepip --upgrade >/dev/null 2>&1 && check pip3 && return 0
+  fi
+
+  return 1
+}
+
 if $SKIP_SEMGREP; then
   warn "Skipping semgrep (--no-semgrep)"
 elif semgrep_works; then
@@ -327,18 +352,29 @@ else
   echo "  Installing semgrep v${SEMGREP_VERSION}..."
   SEMGREP_OK=false
 
-  # macOS: prefer brew (includes native binary); Linux: pip3/pip.
-  # Windows note: semgrep 1.x pip wheel does NOT bundle the native semgrep-core
-  # binary on Windows — the pip install succeeds but the command fails at runtime.
-  # Use WSL or Docker instead. See: https://semgrep.dev/docs/getting-started/
+  # macOS: prefer brew (includes native binary).
+  # Linux: auto-install pip3 if needed, then use pip3/pip/pipx.
+  # Windows: pip wheel installs but semgrep-core native binary is absent —
+  #   use WSL or Docker. See: https://semgrep.dev/docs/getting-started/
   if [ "$OS" = "darwin" ] && check brew; then
     brew install semgrep --quiet 2>&1 | tail -1 && SEMGREP_OK=true
-  elif check pip3; then
-    pip3 install --quiet "semgrep==${SEMGREP_VERSION}" 2>/dev/null && SEMGREP_OK=true
-  elif check pip; then
-    pip install --quiet "semgrep==${SEMGREP_VERSION}" 2>/dev/null && SEMGREP_OK=true
-  elif check pipx; then
-    pipx install "semgrep==${SEMGREP_VERSION}" && SEMGREP_OK=true
+  elif [ "$OS" = "windows" ]; then
+    : # handled below after post-install check
+  elif ensure_pip3; then
+    # Prefer --break-system-packages on modern Debian/Ubuntu (PEP 668).
+    if check pip3; then
+      pip3 install --quiet --break-system-packages "semgrep==${SEMGREP_VERSION}" 2>/dev/null \
+        || pip3 install --quiet "semgrep==${SEMGREP_VERSION}" 2>/dev/null
+      semgrep_works && SEMGREP_OK=true
+    elif check pip; then
+      pip install --quiet "semgrep==${SEMGREP_VERSION}" 2>/dev/null
+      semgrep_works && SEMGREP_OK=true
+    fi
+  fi
+
+  # pipx fallback (any OS).
+  if ! $SEMGREP_OK && check pipx; then
+    pipx install "semgrep==${SEMGREP_VERSION}" >/dev/null 2>&1 && semgrep_works && SEMGREP_OK=true
   fi
 
   # Post-install sanity check: pip install may succeed but semgrep may not run
@@ -356,11 +392,12 @@ else
   if $SEMGREP_OK; then
     info "semgrep installed: $(semgrep --version 2>/dev/null)"
   else
-    if [ "$OS" != "windows" ]; then
-      warn "semgrep installation failed — SAST code analysis will be unavailable"
-      warn "Install manually:"
-      warn "  macOS : brew install semgrep"
-      warn "  Others: pip3 install semgrep==${SEMGREP_VERSION}"
+    if [ "$OS" = "windows" ]; then
+      warn "semgrep is not supported on native Windows."
+      warn "Run install.sh inside WSL for full SAST support."
+    else
+      warn "semgrep installation failed — SAST code analysis will be unavailable."
+      warn "Install manually: pip3 install semgrep==${SEMGREP_VERSION}"
     fi
   fi
 fi

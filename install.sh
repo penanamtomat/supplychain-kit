@@ -8,7 +8,7 @@
 #
 # What this script does:
 #   1. Verify prerequisites  (Go, git, curl)
-#   2. Install scanner tools (syft, grype, gitleaks, semgrep)
+#   2. Install scanner tools (syft, grype, trivy, osv-scanner, gitleaks, semgrep)
 #   3. Build supplychain-kit binary from source
 #   4. Install supplychain-kit into a directory on PATH
 #   5. Print PATH setup instructions when needed
@@ -20,15 +20,19 @@
 #   bash install.sh --help
 #
 # Environment overrides:
-#   INSTALL_DIR      destination for supplychain-kit  (default: ~/.local/bin)
-#   GITLEAKS_VERSION gitleaks release to fetch (default: 8.21.2)
-#   SEMGREP_VERSION  semgrep release to install (default: 1.75.0)
+#   INSTALL_DIR        destination for supplychain-kit  (default: ~/.local/bin)
+#   GITLEAKS_VERSION   gitleaks release to fetch (default: 8.21.2)
+#   SEMGREP_VERSION    semgrep release to install (default: 1.75.0)
+#   TRIVY_VERSION      trivy release to fetch (default: 0.61.0)
+#   OSV_VERSION        osv-scanner release to fetch (default: 1.9.2)
 
 set -euo pipefail
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 GITLEAKS_VERSION="${GITLEAKS_VERSION:-8.21.2}"
 SEMGREP_VERSION="${SEMGREP_VERSION:-1.75.0}"
+TRIVY_VERSION="${TRIVY_VERSION:-0.61.0}"
+OSV_VERSION="${OSV_VERSION:-1.9.2}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BINARY_NAME="supplychain-kit"
 
@@ -49,11 +53,15 @@ check()   { command -v "$1" &>/dev/null; }
 
 # ── flags ─────────────────────────────────────────────────────────────────────
 SKIP_SEMGREP=false
+SKIP_TRIVY=false
+SKIP_OSV=false
 INSTALL_DIR="${INSTALL_DIR:-}"   # resolved after OS detection
 
 for arg in "$@"; do
   case "$arg" in
     --no-semgrep)   SKIP_SEMGREP=true ;;
+    --no-trivy)     SKIP_TRIVY=true ;;
+    --no-osv)       SKIP_OSV=true ;;
     --prefix)       shift; INSTALL_DIR="$1" ;;
     --prefix=*)     INSTALL_DIR="${arg#--prefix=}" ;;
     --help|-h)
@@ -62,6 +70,8 @@ Usage: bash install.sh [OPTIONS]
 
 Options:
   --no-semgrep        Skip semgrep installation (requires Python/pip)
+  --no-trivy          Skip trivy installation
+  --no-osv            Skip osv-scanner installation
   --prefix <dir>      Install supplychain-kit and scanner tools to <dir>
                       (default: ~/.local/bin on Linux/Windows,
                                 /usr/local/bin on macOS if writable)
@@ -69,8 +79,10 @@ Options:
 
 Environment variables:
   INSTALL_DIR         Same as --prefix
-  GITLEAKS_VERSION    gitleaks version to download (default: ${GITLEAKS_VERSION})
-  SEMGREP_VERSION     semgrep version to install  (default: ${SEMGREP_VERSION})
+  GITLEAKS_VERSION    gitleaks version to download  (default: ${GITLEAKS_VERSION})
+  SEMGREP_VERSION     semgrep version to install    (default: ${SEMGREP_VERSION})
+  TRIVY_VERSION       trivy version to download     (default: ${TRIVY_VERSION})
+  OSV_VERSION         osv-scanner version to fetch  (default: ${OSV_VERSION})
 
 Examples:
   bash install.sh
@@ -282,6 +294,87 @@ else
             || warn "grype installation failed — vulnerability matching will be unavailable"
 fi
 
+# ── trivy ─────────────────────────────────────────────────────────────────────
+if $SKIP_TRIVY; then
+  warn "Skipping trivy (--no-trivy)"
+elif check trivy || [ -f "${INSTALL_DIR}/trivy${EXT}" ]; then
+  info "trivy already installed"
+else
+  echo "  Installing trivy v${TRIVY_VERSION}..."
+  ensure_install_dir
+  TRIVY_OK=false
+
+  if [ "$OS" = "darwin" ] && check brew; then
+    brew install aquasecurity/trivy/trivy --quiet 2>&1 | tail -1 && TRIVY_OK=true
+  else
+    # Trivy release filename pattern: trivy_<version>_<OS>-<ARCH>.<ext>
+    case "$OS" in
+      linux)
+        TV_ARCH="$ARCH"
+        [ "$TV_ARCH" = "amd64" ] && TV_ARCH="64bit"
+        [ "$TV_ARCH" = "arm64" ] && TV_ARCH="ARM64"
+        TV_ARCHIVE="trivy_${TRIVY_VERSION}_Linux-${TV_ARCH}.tar.gz"
+        ;;
+      darwin)
+        TV_ARCH="$ARCH"
+        [ "$TV_ARCH" = "amd64" ] && TV_ARCH="64bit"
+        [ "$TV_ARCH" = "arm64" ] && TV_ARCH="ARM64"
+        TV_ARCHIVE="trivy_${TRIVY_VERSION}_macOS-${TV_ARCH}.tar.gz"
+        ;;
+      windows)
+        TV_ARCHIVE="trivy_${TRIVY_VERSION}_windows-64bit.zip"
+        ;;
+    esac
+    TV_URL="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${TV_ARCHIVE}"
+    if download_extract "$TV_URL" "trivy" "${INSTALL_DIR}/trivy${EXT}"; then
+      TRIVY_OK=true
+    fi
+  fi
+
+  $TRIVY_OK && info "trivy installed" \
+            || warn "trivy installation failed — extended CVE coverage will be unavailable"
+fi
+
+# ── osv-scanner ───────────────────────────────────────────────────────────────
+if $SKIP_OSV; then
+  warn "Skipping osv-scanner (--no-osv)"
+elif check osv-scanner || [ -f "${INSTALL_DIR}/osv-scanner${EXT}" ]; then
+  info "osv-scanner already installed"
+else
+  echo "  Installing osv-scanner v${OSV_VERSION}..."
+  ensure_install_dir
+  OSV_OK=false
+
+  if [ "$OS" = "darwin" ] && check brew; then
+    brew install osv-scanner --quiet 2>&1 | tail -1 && OSV_OK=true
+  else
+    # osv-scanner ships as a single static binary (no archive needed).
+    case "$OS-$ARCH" in
+      linux-amd64)   OSV_BIN="osv-scanner_linux_amd64" ;;
+      linux-arm64)   OSV_BIN="osv-scanner_linux_arm64" ;;
+      darwin-amd64)  OSV_BIN="osv-scanner_darwin_amd64" ;;
+      darwin-arm64)  OSV_BIN="osv-scanner_darwin_arm64" ;;
+      windows-amd64) OSV_BIN="osv-scanner_windows_amd64.exe" ;;
+      *)
+        warn "No osv-scanner binary for ${OS}-${ARCH}"
+        OSV_BIN=""
+        ;;
+    esac
+
+    if [ -n "$OSV_BIN" ]; then
+      OSV_URL="https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/${OSV_BIN}"
+      echo "    Downloading ${OSV_BIN}"
+      if curl -fsSL --retry 3 "$OSV_URL" -o "${INSTALL_DIR}/osv-scanner${EXT}"; then
+        chmod 0755 "${INSTALL_DIR}/osv-scanner${EXT}"
+        OSV_OK=true
+      fi
+    fi
+  fi
+
+  $OSV_OK && info "osv-scanner installed" \
+           || warn "osv-scanner installation failed — Google OSV database scan will be unavailable"
+fi
+
 # ── gitleaks ──────────────────────────────────────────────────────────────────
 if check gitleaks || [ -f "${INSTALL_DIR}/gitleaks${EXT}" ]; then
   info "gitleaks already installed"
@@ -430,7 +523,7 @@ echo -e "${BOLD}${GREEN}  supplychain-kit installed successfully!   ${RESET}"
 echo -e "${BOLD}${GREEN}════════════════════════════════════════════${RESET}"
 echo ""
 echo -e "${BOLD}Scanner tools:${RESET}"
-for bin in syft grype gitleaks semgrep; do
+for bin in syft grype trivy osv-scanner gitleaks semgrep; do
   # Accept both PATH resolution and direct presence in INSTALL_DIR.
   if check "$bin" || [ -f "${INSTALL_DIR}/${bin}" ] || [ -f "${INSTALL_DIR}/${bin}.exe" ]; then
     echo -e "  ${GREEN}✓${RESET} ${bin}"

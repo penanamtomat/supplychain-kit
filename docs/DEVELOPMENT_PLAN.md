@@ -8,11 +8,11 @@
 
 ---
 
-## Status Saat Ini — v0.6 (In Progress)
+## Status Saat Ini — v0.7 (In Progress)
 
-- SCA pipeline (syft → grype), SAST pipeline (semgrep + gitleaks), quality gate, dan reachability engine sudah diimplementasikan
-- Bug kritis ditemukan di v0.6: reachability engine tidak terhubung ke CLI dan confidence logic terbalik
-- Sedang dalam proses fix + konsolidasi ke CLI-only
+- v0.6 selesai: reachability engine fix, CLI consolidation (hapus server/worker), static CPG via Joern, e2e gate tests
+- v0.7 hampir selesai: Dependency-Track CLI, DefectDojo CLI, scanner expansion (Trivy + osv-scanner)
+- v0.7 **SELESAI** — semua item sudah di-checklist
 
 ---
 
@@ -175,11 +175,20 @@ Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pad
 - [x] Map normalized findings ke DefectDojo finding format
 - [x] Support `--engagement-id` dan `--product` sebagai parameter
 
+### Scanner Expansion — Trivy & osv-scanner
+
+- [x] `internal/scanner/trivy/trivy.go` — adapter untuk `trivy fs` / `trivy sbom`, parse JSON output Trivy
+- [x] `internal/scanner/osvscanner/osvscanner.go` — adapter untuk `osv-scanner --recursive` / `--sbom`, parse OSV JSON output
+- [x] `SourceTrivy` dan `SourceOSVScanner` ditambahkan ke models
+- [x] Kedua adapter terdaftar di `sca` mode dan `all` mode di `buildRegistry`
+- [x] `scan --mode sca` menjalankan 4 scanner: syft → grype → trivy → osv-scanner
+- [x] Graceful degradation via `ErrBinaryNotFound` — scanner yang tidak terinstall di-skip dengan warning
+
 ### Test
 
 - [x] Mock HTTP tests: `internal/deptrack/client_test.go` — 5 test cases (EnsureProject existing/create, UploadBOM, GetFindings, HTTP error)
 - [x] Mock HTTP tests: `internal/defectdojo/client_test.go` — 4 test cases (EnsureEngagement, PushFindings, empty findings, HTTP error)
-- [ ] Test `sync` command end-to-end dengan syft terinstall
+- [x] Test `sync` command end-to-end dengan syft terinstall (`internal/deptrack/sync_e2e_test.go` — real syft + mock DT server, SBOM 204KB)
 
 ---
 

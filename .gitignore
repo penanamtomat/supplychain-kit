@@ -2,6 +2,7 @@
 bin/
 dist/
 *.exe
+/supplychain-kit
 
 # Go
 *.test

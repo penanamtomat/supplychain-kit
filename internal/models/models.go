@@ -137,6 +137,8 @@ type Finding struct {
 	FixedVersion  string           `json:"fixed_version,omitempty"`
 	AdvisoryURL   string           `json:"advisory_url,omitempty"`
 	Reachability  Reachability     `json:"reachability"`
+	Confidence    float64          `json:"confidence"`       // 0.0-1.0 confidence in reachability assessment
+	Path          []string         `json:"path,omitempty"`    // call graph path from source to sink
 	RiskScore     float64          `json:"risk_score"`
 	VEXStatus     VEXStatus        `json:"vex_status,omitempty"`
 	VEXJustify    VEXJustification `json:"vex_justification,omitempty"`

@@ -198,8 +198,8 @@ func writeTargetReports(dir string, findings []*models.Finding, repo, mode strin
 // writeTableTo writes a human-readable table to any io.Writer.
 func writeTableTo(w *os.File, findings []*models.Finding) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tADVISORY")
-	fmt.Fprintln(tw, "--------\t----------\t-------\t---\t----\t--------")
+	fmt.Fprintln(tw, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tREACHABLE\tRISK_SCORE")
+	fmt.Fprintln(tw, "--------\t----------\t-------\t---\t----\t---------\t----------")
 	for _, f := range findings {
 		pkg := f.Package
 		if pkg == "" {
@@ -215,13 +215,13 @@ func writeTableTo(w *os.File, findings []*models.Finding) {
 		} else if f.Line > 0 {
 			loc = fmt.Sprintf("%s:%d", loc, f.Line)
 		}
-		adv := f.AdvisoryURL
-		if adv == "" {
-			adv = "-"
+		reach := string(f.Reachability)
+		if reach == "" {
+			reach = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\n",
 			strings.ToUpper(string(f.Severity)),
-			f.RuleID, pkg, fix, loc, adv,
+			f.RuleID, pkg, fix, loc, reach, f.RiskScore,
 		)
 	}
 	tw.Flush()
@@ -311,8 +311,8 @@ func printSummarySection(label string, findings []*models.Finding) {
 // printTable writes a human-readable table of findings to stdout.
 func printTable(findings []*models.Finding) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tADVISORY")
-	fmt.Fprintln(w, "--------\t----------\t-------\t---\t----\t--------")
+	fmt.Fprintln(w, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tREACHABLE\tRISK_SCORE")
+	fmt.Fprintln(w, "--------\t----------\t-------\t---\t----\t---------\t----------")
 	for _, f := range findings {
 		pkg := f.Package
 		if pkg == "" {
@@ -328,13 +328,13 @@ func printTable(findings []*models.Finding) error {
 		} else if f.Line > 0 {
 			loc = fmt.Sprintf("%s:%d", loc, f.Line)
 		}
-		adv := f.AdvisoryURL
-		if adv == "" {
-			adv = "-"
+		reach := string(f.Reachability)
+		if reach == "" {
+			reach = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\n",
 			strings.ToUpper(string(f.Severity)),
-			f.RuleID, pkg, fix, loc, adv,
+			f.RuleID, pkg, fix, loc, reach, f.RiskScore,
 		)
 	}
 	return w.Flush()

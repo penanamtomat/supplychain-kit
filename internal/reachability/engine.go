@@ -1,73 +1,382 @@
 // Package reachability decides whether each Grype/SCA finding is exercised
 // by first-party code (static analysis over a Joern CPG export) and, when
 // available, confirms reachability via eBPF runtime telemetry.
-//
-// The CPG analyzer here is intentionally a small, well-defined subset: it
-// loads symbols touched by source files and treats a package as "reachable"
-// when any of its exported symbols appears in the call graph. A production
-// deployment swaps this for a full source-to-sink path search; the interface
-// remains stable.
 package reachability
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 )
 
-// Engine combines a static CPG analyzer with optional runtime confirmation.
 type Engine struct {
-	runtime RuntimeConfirmer // optional; nil = no eBPF
+	runtime RuntimeConfirmer
 }
 
-// RuntimeConfirmer reports whether a package is loaded into a running process.
 type RuntimeConfirmer interface {
 	IsLoaded(ctx context.Context, assetID, pkg string) (bool, error)
 }
 
-// New returns an Engine with the supplied (possibly nil) runtime confirmer.
-func New(rt RuntimeConfirmer) *Engine { return &Engine{runtime: rt} }
+func New(rt RuntimeConfirmer) *Engine {
+	return &Engine{runtime: rt}
+}
 
-// Analyze annotates each finding with a Reachability verdict. cpgPath may be
-// empty; in that case every finding is left as ReachUnknown for SCA hits and
-// ReachReachable for SAST/secret findings (those are first-party by nature).
 func (e *Engine) Analyze(ctx context.Context, assetID, cpgPath string, findings []*models.Finding) error {
-	usedSymbols, err := loadSymbols(cpgPath)
-	if err != nil {
-		// Missing CPG isn't fatal — degrade to "unknown" for SCA findings.
-		usedSymbols = nil
+	var cpg *CPG
+	var err error
+
+	if cpgPath != "" {
+		cpg, err = loadCPG(cpgPath)
+		if err != nil {
+			cpg = nil
+		}
 	}
 
+	var wg sync.WaitGroup
 	for _, f := range findings {
-		// SAST and secret findings are inherently first-party.
-		if isFirstParty(f) {
-			if f.Reachability == "" || f.Reachability == models.ReachUnknown {
-				f.Reachability = models.ReachReachable
+		wg.Add(1)
+		go func(finding *models.Finding) {
+			defer wg.Done()
+			e.analyzeFinding(ctx, assetID, cpg, finding)
+		}(f)
+	}
+	wg.Wait()
+	return nil
+}
+
+func (e *Engine) analyzeFinding(ctx context.Context, assetID string, cpg *CPG, f *models.Finding) {
+	if isFirstParty(f) {
+		if f.Reachability == "" || f.Reachability == models.ReachUnknown {
+			f.Reachability = models.ReachReachable
+			f.Confidence = 1.0
+		}
+		return
+	}
+
+	if cpg != nil {
+		e.analyzeWithCPG(cpg, f)
+	} else {
+		f.Reachability = models.ReachUnknown
+		f.Confidence = 0.0
+	}
+
+	if e.runtime != nil && f.Package != "" {
+		loaded, err := e.runtime.IsLoaded(ctx, assetID, f.Package)
+		if err == nil && loaded {
+			f.Reachability = models.ReachConfirmed
+			f.Confidence = 1.0
+		}
+	}
+}
+
+func (e *Engine) analyzeWithCPG(cpg *CPG, f *models.Finding) {
+	vulnerableSymbol := extractVulnerableSymbol(f)
+	analysis := cpg.FindPathToSink(vulnerableSymbol, f.Package)
+
+	if analysis.PathFound {
+		f.Reachability = models.ReachReachable
+		f.Confidence = analysis.Confidence
+		f.Path = analysis.Path
+	} else {
+		f.Reachability = models.ReachUnreachable
+		f.Confidence = analysis.Confidence
+		f.Path = []string{}
+	}
+}
+
+type CPG struct {
+	Vertices []*Vertex
+	Edges    []*Edge
+
+	methodsByFullname map[string]*Vertex
+	callsBySource     map[string][]*Edge
+	importsByFile     map[string][]string
+}
+
+type Vertex struct {
+	ID         string
+	Type       string
+	Properties map[string]any
+}
+
+type Edge struct {
+	From  string
+	To    string
+	Label string
+}
+
+type PathAnalysis struct {
+	PathFound  bool
+	Confidence float64
+	Path       []string
+}
+
+func loadCPG(path string) (*CPG, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var doc struct {
+		Vertices []struct {
+			ID         string         `json:"id"`
+			Label      string         `json:"label"`
+			Properties map[string]any `json:"properties"`
+		} `json:"vertices"`
+		Edges []struct {
+			From string `json:"inV"`
+			To   string `json:"outV"`
+			Label string `json:"label"`
+		} `json:"edges"`
+	}
+
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse CPG: %w", err)
+	}
+
+	cpg := &CPG{
+		Vertices:          make([]*Vertex, 0, len(doc.Vertices)),
+		Edges:            make([]*Edge, 0, len(doc.Edges)),
+		methodsByFullname: make(map[string]*Vertex),
+		callsBySource:     make(map[string][]*Edge),
+		importsByFile:     make(map[string][]string),
+	}
+
+	for _, v := range doc.Vertices {
+		vertex := &Vertex{
+			ID:         v.ID,
+			Type:       v.Label,
+			Properties: v.Properties,
+		}
+		cpg.Vertices = append(cpg.Vertices, vertex)
+
+		if fullName, ok := v.Properties["FULL_NAME"].(string); ok && fullName != "" {
+			cpg.methodsByFullname[fullName] = vertex
+		}
+		if fullName, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && fullName != "" {
+			cpg.methodsByFullname[fullName] = vertex
+		}
+	}
+
+	for _, e := range doc.Edges {
+		edge := &Edge{
+			From:  e.To,
+			To:    e.From,
+			Label: e.Label,
+		}
+		cpg.Edges = append(cpg.Edges, edge)
+		cpg.callsBySource[edge.From] = append(cpg.callsBySource[edge.From], edge)
+	}
+
+	cpg.buildImportIndex()
+
+	return cpg, nil
+}
+
+func (cpg *CPG) buildImportIndex() {
+	cpg.importsByFile = make(map[string][]string)
+
+	for _, v := range cpg.Vertices {
+		if v.Type == "FILE" {
+			filename, _ := v.Properties["NAME"].(string)
+			if imports, ok := v.Properties["IMPORTS"].([]any); ok {
+				importList := make([]string, 0, len(imports))
+				for _, imp := range imports {
+					if s, ok := imp.(string); ok {
+						importList = append(importList, s)
+					}
+				}
+				if filename != "" {
+					cpg.importsByFile[filename] = importList
+				}
 			}
+		}
+	}
+}
+
+func (cpg *CPG) FindPathToSink(vulnerableSymbol, pkgName string) PathAnalysis {
+	if vulnerableSymbol == "" && pkgName == "" {
+		return PathAnalysis{PathFound: false, Confidence: 0.0}
+	}
+
+	if vulnerableSymbol != "" {
+		if path := cpg.findDirectCallPath(vulnerableSymbol); len(path) > 0 {
+			return PathAnalysis{
+				PathFound:  true,
+				Confidence: 0.95,
+				Path:       path,
+			}
+		}
+	}
+
+	if pkgName != "" {
+		conf, files := cpg.checkPackageImports(pkgName)
+		if files > 0 {
+			return PathAnalysis{
+				PathFound:  true,
+				Confidence: conf,
+				Path:       []string{fmt.Sprintf("Package %s imported in %d files", pkgName, files)},
+			}
+		}
+	}
+
+	if vulnerableSymbol != "" {
+		for _, v := range cpg.Vertices {
+			if name, ok := v.Properties["FULL_NAME"].(string); ok && strings.Contains(name, vulnerableSymbol) {
+				return PathAnalysis{
+					PathFound:  true,
+					Confidence: 0.3,
+					Path:       []string{fmt.Sprintf("Symbol %s found in CPG", vulnerableSymbol)},
+				}
+			}
+		}
+	}
+
+	return PathAnalysis{
+		PathFound:  false,
+		Confidence: 0.0,
+		Path:       []string{},
+	}
+}
+
+func (cpg *CPG) findDirectCallPath(targetSymbol string) []string {
+	sources := cpg.findEntryPoints()
+	if len(sources) == 0 {
+		return nil
+	}
+
+	target, exists := cpg.methodsByFullname[targetSymbol]
+	if !exists {
+		return nil
+	}
+
+	for _, src := range sources {
+		if src.ID == target.ID {
+			return []string{vertexFullName(src), vertexFullName(target)}
+		}
+	}
+
+	visited := make(map[string]bool)
+	queue := make([]string, 0)
+
+	for _, src := range sources {
+		visited[src.ID] = true
+		queue = append(queue, src.ID)
+	}
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		if current == target.ID {
+			return []string{vertexFullName(cpg.getVertex(current)), targetSymbol}
+		}
+
+		for _, edge := range cpg.callsBySource[current] {
+			if !visited[edge.To] {
+				visited[edge.To] = true
+				queue = append(queue, edge.To)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (cpg *CPG) findEntryPoints() []*Vertex {
+	var entryPoints []*Vertex
+
+	for _, v := range cpg.Vertices {
+		name, hasName := v.Properties["FULL_NAME"].(string)
+		if !hasName {
+			name, _ = v.Properties["METHOD_FULL_NAME"].(string)
+		}
+
+		if name == "" {
 			continue
 		}
 
-		// SCA: try CPG, then optionally confirm at runtime.
-		switch {
-		case usedSymbols != nil && containsPackage(usedSymbols, f.Package):
-			f.Reachability = models.ReachReachable
-		case usedSymbols != nil:
-			f.Reachability = models.ReachUnreachable
-		default:
-			f.Reachability = models.ReachUnknown
+		lower := strings.ToLower(name)
+		isEntryPoint :=
+			strings.HasSuffix(lower, ".main") ||
+			strings.Contains(lower, "handler") ||
+			strings.Contains(lower, "controller") ||
+			strings.Contains(lower, "serve") ||
+			strings.Contains(lower, "listen") ||
+			strings.Contains(lower, "start") ||
+			strings.Contains(lower, "router") ||
+			strings.Contains(lower, "middleware") ||
+			strings.Contains(lower, "endpoint") ||
+			strings.Contains(lower, ".handle") ||
+			strings.Contains(lower, ".process") ||
+			strings.Contains(lower, ".worker")
+
+		if !isEntryPoint {
+			isEntryPoint = strings.Contains(lower, "http") ||
+				strings.Contains(lower, "grpc") ||
+				strings.Contains(lower, "server")
 		}
 
-		if e.runtime != nil {
-			loaded, err := e.runtime.IsLoaded(ctx, assetID, f.Package)
-			if err == nil && loaded {
-				f.Reachability = models.ReachConfirmed
+		if isEntryPoint {
+			entryPoints = append(entryPoints, v)
+		}
+	}
+
+	return entryPoints
+}
+
+func (cpg *CPG) checkPackageImports(pkgName string) (float64, int) {
+	var count int
+	for _, imports := range cpg.importsByFile {
+		for _, imp := range imports {
+			if strings.Contains(imp, pkgName) {
+				count++
+				break
 			}
 		}
 	}
+
+	if count == 0 {
+		return 0.0, 0
+	}
+
+	conf := minConfidence(0.7+float64(count)*0.05, 0.7)
+
+	return conf, count
+}
+
+func (cpg *CPG) getVertex(id string) *Vertex {
+	for _, v := range cpg.Vertices {
+		if v.ID == id {
+			return v
+		}
+	}
 	return nil
+}
+
+func vertexFullName(v *Vertex) string {
+	if v == nil {
+		return ""
+	}
+	if name, ok := v.Properties["FULL_NAME"].(string); ok && name != "" {
+		return name
+	}
+	if name, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && name != "" {
+		return name
+	}
+	return ""
+}
+
+func minConfidence(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func isFirstParty(f *models.Finding) bool {
@@ -79,46 +388,20 @@ func isFirstParty(f *models.Finding) bool {
 	return false
 }
 
-// loadSymbols reads a graphson-exported CPG and returns the set of symbol
-// names referenced anywhere in the call graph. Real implementations should
-// stream this for large graphs; we read it whole here to keep the reference
-// implementation easy to follow.
-func loadSymbols(path string) (map[string]struct{}, error) {
-	if path == "" {
-		return nil, os.ErrNotExist
+func extractVulnerableSymbol(f *models.Finding) string {
+	if f.Package == "" {
+		return ""
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var doc struct {
-		Vertices []struct {
-			Properties map[string]any `json:"properties"`
-		} `json:"vertices"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, err
-	}
-	syms := map[string]struct{}{}
-	for _, v := range doc.Vertices {
-		if name, ok := v.Properties["FULL_NAME"].(string); ok && name != "" {
-			syms[name] = struct{}{}
-		}
-		if name, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && name != "" {
-			syms[name] = struct{}{}
-		}
-	}
-	return syms, nil
-}
 
-func containsPackage(syms map[string]struct{}, pkg string) bool {
-	if pkg == "" {
-		return false
+	parts := strings.Split(f.Package, "/")
+	symbol := parts[len(parts)-1]
+
+	// If the RuleID looks like a CWE or a function-specific rule (e.g. semgrep rule
+	// with a function name), prefer using the package-level symbol.
+	// For SCA findings (grype), the package name is the best signal we have.
+	if symbol == "" {
+		return ""
 	}
-	for s := range syms {
-		if strings.Contains(s, pkg) {
-			return true
-		}
-	}
-	return false
+
+	return symbol
 }

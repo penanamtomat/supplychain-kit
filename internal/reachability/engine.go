@@ -345,7 +345,7 @@ func (cpg *CPG) checkPackageImports(pkgName string) (float64, int) {
 		return 0.0, 0
 	}
 
-	conf := minConfidence(0.7+float64(count)*0.05, 0.7)
+	conf := capConfidence(0.7+float64(count)*0.05, 0.95)
 
 	return conf, count
 }
@@ -372,11 +372,12 @@ func vertexFullName(v *Vertex) string {
 	return ""
 }
 
-func minConfidence(a, b float64) float64 {
-	if a < b {
-		return a
+// capConfidence clamps confidence to a maximum value.
+func capConfidence(val, max float64) float64 {
+	if val > max {
+		return max
 	}
-	return b
+	return val
 }
 
 func isFirstParty(f *models.Finding) bool {

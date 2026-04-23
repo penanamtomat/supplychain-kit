@@ -20,6 +20,7 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/correlation"
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 	"github.com/penanamtomat/supplychain-kit/internal/quality"
+	"github.com/penanamtomat/supplychain-kit/internal/reachability"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/gitleaks"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/grype"
@@ -83,6 +84,7 @@ Target:
 			}
 
 			var results []scanner.ScannedResult
+			var artifacts map[string]string
 			var cleanup func()
 
 			if isLocalPath(repo) {
@@ -91,16 +93,12 @@ Target:
 					return fmt.Errorf("resolve path: %w", err)
 				}
 				asset.Name = abs
-				var artifacts map[string]string
 				results, artifacts = reg.RunLocal(cmd.Context(), asset, abs)
-				_ = artifacts
 				cleanup = func() {}
 			} else {
 				asset.RepoURL = repo
-				var artifacts map[string]string
 				var err error
 				results, artifacts, cleanup, err = reg.RunPipeline(cmd.Context(), asset, ref)
-				_ = artifacts
 				if err != nil {
 					return err
 				}
@@ -108,6 +106,16 @@ Target:
 			defer cleanup()
 
 			merged := correlation.Merge(results)
+
+			cpgPath := ""
+			if artifacts != nil {
+				cpgPath = artifacts[joern.ArtifactCPGPath]
+			}
+			reach := reachability.New(nil)
+			if err := reach.Analyze(cmd.Context(), asset.ID, cpgPath, merged); err != nil {
+				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
+			}
+
 			scorer := scoring.Scorer{}
 			for _, f := range merged {
 				if f.Reachability == "" {
@@ -680,6 +688,7 @@ Examples:
 			}
 
 			var results []scanner.ScannedResult
+			var artifacts map[string]string
 			var cleanup func()
 
 			if isLocalPath(repo) {
@@ -688,14 +697,12 @@ Examples:
 					return fmt.Errorf("resolve path: %w", err)
 				}
 				asset.Name = abs
-				results, _ = reg.RunLocal(cmd.Context(), asset, abs)
+				results, artifacts = reg.RunLocal(cmd.Context(), asset, abs)
 				cleanup = func() {}
 			} else {
 				asset.RepoURL = repo
-				var artifacts map[string]string
 				var err error
 				results, artifacts, cleanup, err = reg.RunPipeline(cmd.Context(), asset, ref)
-				_ = artifacts
 				if err != nil {
 					return err
 				}
@@ -703,6 +710,16 @@ Examples:
 			defer cleanup()
 
 			merged := correlation.Merge(results)
+
+			cpgPath := ""
+			if artifacts != nil {
+				cpgPath = artifacts[joern.ArtifactCPGPath]
+			}
+			reach := reachability.New(nil)
+			if err := reach.Analyze(cmd.Context(), asset.ID, cpgPath, merged); err != nil {
+				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
+			}
+
 			scorer := scoring.Scorer{}
 			for _, f := range merged {
 				if f.Reachability == "" {

@@ -12,27 +12,9 @@ import (
 
 // Config is the root configuration struct.
 type Config struct {
-	HTTP        HTTPConfig        `mapstructure:"http"`
-	Database    DatabaseConfig    `mapstructure:"database"`
-	Redis       RedisConfig       `mapstructure:"redis"`
 	Scanners    ScannersConfig    `mapstructure:"scanners"`
 	Remediation RemediationConfig `mapstructure:"remediation"`
 	QualityGate QualityGateConfig `mapstructure:"quality_gate"`
-}
-
-type HTTPConfig struct {
-	Addr           string `mapstructure:"addr"`
-	ReadTimeoutSec int    `mapstructure:"read_timeout_sec"`
-}
-
-type DatabaseConfig struct {
-	DSN         string `mapstructure:"dsn"`
-	MaxConns    int    `mapstructure:"max_conns"`
-	AutoMigrate bool   `mapstructure:"auto_migrate"`
-}
-
-type RedisConfig struct {
-	URL string `mapstructure:"url"`
 }
 
 type ScannersConfig struct {
@@ -66,10 +48,6 @@ func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigType("yaml")
 
-	v.SetDefault("http.addr", ":8080")
-	v.SetDefault("http.read_timeout_sec", 30)
-	v.SetDefault("database.max_conns", 10)
-	v.SetDefault("database.auto_migrate", true)
 	v.SetDefault("scanners.work_dir", "/tmp/aspm-work")
 	v.SetDefault("scanners.max_parallel_syft", 4)
 	v.SetDefault("scanners.max_parallel_grype", 4)

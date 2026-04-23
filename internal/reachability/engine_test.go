@@ -138,7 +138,7 @@ func TestCPG_FindPathToSink(t *testing.T) {
 			vulnerableSymbol: "",
 			pkgName:          "github.com/pkg/target",
 			wantFound:        true,
-			wantConfidence:   0.7,
+			wantConfidence:   0.75,
 		},
 		{
 			name:             "package not imported - should not find",
@@ -256,24 +256,41 @@ func TestIsFirstParty(t *testing.T) {
 	}
 }
 
-func TestMinConfidence(t *testing.T) {
+func TestCapConfidence(t *testing.T) {
 	tests := []struct {
-		a, b, want float64
+		val, max, want float64
 	}{
-		{0.5, 1.0, 0.5},
-		{1.0, 0.5, 0.5},
+		{0.5, 0.95, 0.5},
+		{1.0, 0.95, 0.95},
 		{0.9, 0.95, 0.9},
-		{0.0, 0.0, 0.0},
+		{0.0, 0.95, 0.0},
 	}
 
 	for _, tt := range tests {
 		t.Run("", func(t *testing.T) {
-			result := minConfidence(tt.a, tt.b)
-
+			result := capConfidence(tt.val, tt.max)
 			if result != tt.want {
-				t.Errorf("minConfidence(%v, %v) = %v, want %v", tt.a, tt.b, result, tt.want)
+				t.Errorf("capConfidence(%v, %v) = %v, want %v", tt.val, tt.max, result, tt.want)
 			}
 		})
+	}
+}
+
+func TestCapConfidence_IncreasesWithMoreImports(t *testing.T) {
+	// Regression test: previously minConfidence was used, which always returned
+	// the lower bound (0.7), making confidence constant regardless of import count.
+	conf1 := capConfidence(0.7+float64(1)*0.05, 0.95) // 1 import
+	conf3 := capConfidence(0.7+float64(3)*0.05, 0.95) // 3 imports
+	conf20 := capConfidence(0.7+float64(20)*0.05, 0.95) // many imports — should cap
+
+	if conf1 <= 0.7 {
+		t.Errorf("1 import: confidence should be > 0.7, got %v", conf1)
+	}
+	if conf3 <= conf1 {
+		t.Errorf("3 imports should have higher confidence than 1, got %v <= %v", conf3, conf1)
+	}
+	if conf20 != 0.95 {
+		t.Errorf("many imports should cap at 0.95, got %v", conf20)
 	}
 }
 

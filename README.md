@@ -34,11 +34,9 @@ This platform answers that question by:
 
 ## Tech stack
 
-- **Core engine:** Go 1.22 — high-concurrency CPG/AST processing, REST API, scanner orchestration.
-- **Remediation layer:** Python 3.11 — FastAPI, LLM orchestration (Anthropic Claude / OpenAI), CSAF 2.0 generation.
-- **Data layer:** PostgreSQL 16 — assets, findings, CPG metadata, audit history.
-- **Cache / queue:** Redis 7 — scan job queue, scoring cache.
-- **Orchestration:** Docker Compose for local, Helm/Kubernetes manifests for production.
+- **Core engine:** Go — single static binary, no runtime dependencies.
+- **Scanners:** Syft, Grype, Semgrep, Gitleaks, Joern (all external CLIs, installed separately).
+- **No database, no Redis, no Docker required** — runs anywhere a Go binary can run.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component diagram and data flow.
 
@@ -46,33 +44,22 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component diagram and data f
 
 ```
 .
-├── cmd/                    # Go binary entry points
-│   ├── aspm-api/           # REST API + dashboards (v0.8+)
-│   ├── aspm-scanner/       # Scanner orchestrator (CI worker)
-│   └── supplychain-kit/    # Operator CLI (local scans, gate checks)
+├── cmd/
+│   └── supplychain-kit/    # CLI entry point
 ├── internal/               # Private Go packages
-│   ├── api/                # HTTP handlers, middleware, routing
-│   ├── config/             # Viper-based configuration
-│   ├── ingestion/          # Git provider webhook receivers
-│   ├── scanner/            # Adapters: syft, grype, semgrep, joern, gitleaks
-│   ├── correlation/        # Finding normalization & dedup (DefectDojo-shape)
-│   ├── reachability/       # CPG + eBPF reachability engine
-│   ├── scoring/            # Integrated Risk Score calculator
-│   ├── quality/            # Quality Gate evaluator (CI break/pass)
+│   ├── agenticsast/        # Snippet-level SAST (used in v0.8 Claude Code integration)
+│   ├── config/             # Viper-based configuration (configs/aspm.yaml)
+│   ├── correlation/        # Finding normalization & dedup
+│   ├── defectdojo/         # DefectDojo API client (used by v0.7 CLI commands)
+│   ├── deptrack/           # Dependency-Track API client (used by v0.7 CLI commands)
 │   ├── models/             # Domain models (Asset, Finding, SBOM, ...)
-│   └── storage/            # PostgreSQL repositories
+│   ├── quality/            # Quality Gate evaluator (CI break/pass)
+│   ├── reachability/       # CPG reachability engine (Joern + static analysis)
+│   ├── scanner/            # Adapters: syft, grype, semgrep, joern, gitleaks
+│   └── scoring/            # Integrated Risk Score calculator
 ├── pkg/                    # Public Go packages (importable)
 │   ├── types/              # Shared types (CycloneDX, CVSS, ...)
 │   └── sbom/               # SBOM helpers
-├── remediation/            # Python remediation service
-│   ├── api/                # FastAPI server
-│   ├── agents/             # LLM remediation + Renovate agent
-│   ├── reports/            # CSAF 2.0 VEX generator
-│   └── tests/
-├── deployments/
-│   ├── docker/             # Dockerfiles per service
-│   └── k8s/                # Helm-style manifests
-├── migrations/             # Versioned SQL migrations
 ├── configs/                # Sample configuration files
 ├── docs/                   # PRD + design docs
 ├── scripts/                # Bootstrap & developer helpers
@@ -395,22 +382,21 @@ Configuration file: `configs/aspm.yaml`. Environment variables use the prefix `A
 
 | Variable | Purpose | Required |
 |---|---|---|
-| `ASPM_DB_DSN` | Postgres connection string | v0.8+ (server mode only) |
-| `ASPM_REDIS_URL` | Redis URL for scan queue | v0.8+ (server mode only) |
-| `ASPM_LLM_PROVIDER` | `anthropic` or `openai` | v0.9+ (AI remediation only) |
-| `ASPM_LLM_API_KEY` | API key for LLM provider | v0.9+ (AI remediation only) |
-| `ASPM_GITHUB_TOKEN` | Token for opening PRs | v0.9+ (AI remediation only) |
-
-> Database and Redis are **not required** in standalone CLI mode. They are introduced in v0.8 for team/server deployments.
+| `ASPM_SCANNERS_WORK_DIR` | Temp directory for scanner workfiles | No (default: `/tmp/aspm-work`) |
+| `ASPM_QUALITY_GATE_FAIL_ON` | Override fail-on severity rules | No |
+| `ASPM_QUALITY_GATE_WARN_ON` | Override warn-on severity rules | No |
 
 ## Roadmap
 
-Aligned with the four-phase delivery in the PRD:
+| Version | Focus | Status |
+|---------|-------|--------|
+| v0.3–v0.5 | SCA pipeline, SAST pipeline, Quality Gate | ✅ Done |
+| v0.6 | Reachability engine + CLI consolidation | 🔧 In Progress |
+| v0.7 | Dependency-Track & DefectDojo CLI commands | Planned |
+| v0.8 | Claude Code MCP integration + Agentic SAST | Planned |
+| v1.0 | Binary release, docs, Homebrew | Planned |
 
-1. **Phase 1 — Visibility (M1–M3):** Syft/Grype, Gitleaks, DefectDojo-shaped Single Pane of Glass. *(implemented in this repo)*
-2. **Phase 2 — Orchestration & Reachability PoC (M4–M6):** CI Quality Gates and a Joern reachability PoC. *(scaffolded)*
-3. **Phase 3 — Intelligence (M7–M10):** Full CPG + eBPF reachability and Agentic SAST.
-4. **Phase 4 — Automation (M11–M15):** AI remediation PRs and CSAF 2.0 VEX automation.
+See [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) for detailed task breakdown.
 
 ## Compliance
 

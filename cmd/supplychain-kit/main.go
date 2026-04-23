@@ -27,6 +27,8 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/joern"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/semgrep"
 	syftadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/syft"
+	"github.com/penanamtomat/supplychain-kit/internal/defectdojo"
+	"github.com/penanamtomat/supplychain-kit/internal/deptrack"
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
 )
 
@@ -35,7 +37,7 @@ func main() {
 		Use:   "supplychain-kit",
 		Short: "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
 	}
-	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd())
+	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -960,4 +962,221 @@ func readEngagementSummary(path string) engagementSummary {
 	}
 	_ = json.Unmarshal(raw, &s)
 	return s
+}
+
+// deptrackCmd returns the top-level `deptrack` command with upload/status/sync subcommands.
+func deptrackCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "deptrack",
+		Short: "Interact with a Dependency-Track instance from the CLI",
+	}
+	cmd.AddCommand(deptrackUploadCmd(), deptrackStatusCmd(), deptrackSyncCmd())
+	return cmd
+}
+
+func deptrackUploadCmd() *cobra.Command {
+	var (
+		dtURL      string
+		dtAPIKey   string
+		sbomFile   string
+		projectID  string
+		projectVer string
+	)
+	cmd := &cobra.Command{
+		Use:   "upload",
+		Short: "Upload an SBOM to Dependency-Track",
+		Example: `  supplychain-kit deptrack upload --url https://dt.example.com --api-key $DT_KEY --sbom sbom.json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			raw, err := os.ReadFile(sbomFile)
+			if err != nil {
+				return fmt.Errorf("read sbom: %w", err)
+			}
+			client := deptrack.New(dtURL, dtAPIKey)
+			uuid, err := client.EnsureProject(cmd.Context(), projectID, projectVer)
+			if err != nil {
+				return fmt.Errorf("deptrack ensure project: %w", err)
+			}
+			if err := client.UploadBOM(cmd.Context(), uuid, raw); err != nil {
+				return fmt.Errorf("deptrack upload: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "  SBOM uploaded to project %s (uuid: %s)\n", projectID, uuid)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dtURL, "url", "", "Dependency-Track base URL (e.g. https://dt.example.com)")
+	cmd.Flags().StringVar(&dtAPIKey, "api-key", "", "Dependency-Track API key")
+	cmd.Flags().StringVar(&sbomFile, "sbom", "", "path to CycloneDX SBOM JSON file")
+	cmd.Flags().StringVar(&projectID, "project", "", "project name in Dependency-Track")
+	cmd.Flags().StringVar(&projectVer, "version", "latest", "project version")
+	_ = cmd.MarkFlagRequired("url")
+	_ = cmd.MarkFlagRequired("api-key")
+	_ = cmd.MarkFlagRequired("sbom")
+	_ = cmd.MarkFlagRequired("project")
+	return cmd
+}
+
+func deptrackStatusCmd() *cobra.Command {
+	var (
+		dtURL     string
+		dtAPIKey  string
+		projectID string
+	)
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Poll vulnerability findings for a project in Dependency-Track",
+		Example: `  supplychain-kit deptrack status --url https://dt.example.com --api-key $DT_KEY --project myapp`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := deptrack.New(dtURL, dtAPIKey)
+			uuid, err := client.EnsureProject(cmd.Context(), projectID, "")
+			if err != nil {
+				return fmt.Errorf("deptrack lookup: %w", err)
+			}
+			findings, err := client.GetFindings(cmd.Context(), uuid)
+			if err != nil {
+				return fmt.Errorf("deptrack findings: %w", err)
+			}
+			if len(findings) == 0 {
+				fmt.Fprintln(os.Stderr, "  No findings from Dependency-Track.")
+				return nil
+			}
+			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "COMPONENT\tVERSION\tCVE\tSEVERITY\tCVSSv3")
+			for _, f := range findings {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.1f\n",
+					f.Component.Name, f.Component.Version,
+					f.Vulnerability.VulnID, f.Vulnerability.Severity,
+					f.Vulnerability.CVSSv3)
+			}
+			_ = tw.Flush()
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dtURL, "url", "", "Dependency-Track base URL")
+	cmd.Flags().StringVar(&dtAPIKey, "api-key", "", "Dependency-Track API key")
+	cmd.Flags().StringVar(&projectID, "project", "", "project name in Dependency-Track")
+	_ = cmd.MarkFlagRequired("url")
+	_ = cmd.MarkFlagRequired("api-key")
+	_ = cmd.MarkFlagRequired("project")
+	return cmd
+}
+
+func deptrackSyncCmd() *cobra.Command {
+	var (
+		dtURL      string
+		dtAPIKey   string
+		projectID  string
+		projectVer string
+		repo       string
+	)
+	cmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Generate SBOM for a repo and upload it to Dependency-Track in one step",
+		Example: `  supplychain-kit deptrack sync --repo . --url https://dt.example.com --api-key $DT_KEY --project myapp`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			abs, err := filepath.Abs(repo)
+			if err != nil {
+				return fmt.Errorf("resolve path: %w", err)
+			}
+			// Step 1: generate SBOM via syft.
+			syftScanner := syftadapter.New()
+			reg := scanner.NewRegistry(syftScanner)
+			asset := &models.Asset{ID: "local", Name: abs, Environment: models.EnvDev, Tier: 2}
+			results, _ := reg.RunLocal(cmd.Context(), asset, abs)
+
+			var sbomRaw []byte
+			for _, r := range results {
+				if p, ok := r.Result.Artifacts[scanner.ArtifactSBOMPath]; ok {
+					sbomRaw, err = os.ReadFile(p)
+					if err != nil {
+						return fmt.Errorf("read sbom: %w", err)
+					}
+					break
+				}
+			}
+			if sbomRaw == nil {
+				return fmt.Errorf("syft did not produce an SBOM — is syft installed?")
+			}
+
+			// Step 2: upload to Dependency-Track.
+			client := deptrack.New(dtURL, dtAPIKey)
+			uuid, err := client.EnsureProject(cmd.Context(), projectID, projectVer)
+			if err != nil {
+				return fmt.Errorf("deptrack ensure project: %w", err)
+			}
+			if err := client.UploadBOM(cmd.Context(), uuid, sbomRaw); err != nil {
+				return fmt.Errorf("deptrack upload: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "  Synced SBOM for %s to Dependency-Track project %s\n", abs, projectID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", ".", "local repository path")
+	cmd.Flags().StringVar(&dtURL, "url", "", "Dependency-Track base URL")
+	cmd.Flags().StringVar(&dtAPIKey, "api-key", "", "Dependency-Track API key")
+	cmd.Flags().StringVar(&projectID, "project", "", "project name in Dependency-Track")
+	cmd.Flags().StringVar(&projectVer, "version", "latest", "project version")
+	_ = cmd.MarkFlagRequired("url")
+	_ = cmd.MarkFlagRequired("api-key")
+	_ = cmd.MarkFlagRequired("project")
+	return cmd
+}
+
+// defectdojoCmd returns the `defectdojo` command with push subcommand.
+func defectdojoCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "defectdojo",
+		Short: "Push findings to a DefectDojo instance from the CLI",
+	}
+	cmd.AddCommand(defectdojoPushCmd())
+	return cmd
+}
+
+func defectdojoPushCmd() *cobra.Command {
+	var (
+		djURL        string
+		djAPIKey     string
+		findingsFile string
+		productID    int
+		engagementID int
+	)
+	cmd := &cobra.Command{
+		Use:   "push",
+		Short: "Push findings JSON to DefectDojo",
+		Example: `  supplychain-kit defectdojo push --url https://dojo.example.com --api-key $DJ_KEY --findings findings.json --product 1`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			findings, err := readFindings(findingsFile)
+			if err != nil {
+				return err
+			}
+
+			client := defectdojo.New(djURL, djAPIKey)
+
+			// Use provided engagement ID or create a new one under the product.
+			eid := engagementID
+			if eid == 0 {
+				if productID == 0 {
+					return fmt.Errorf("provide --engagement-id or --product to create a new engagement")
+				}
+				eid, err = client.EnsureEngagement(cmd.Context(), productID, fmt.Sprintf("cli-%d", time.Now().Unix()))
+				if err != nil {
+					return fmt.Errorf("defectdojo engagement: %w", err)
+				}
+			}
+
+			if err := client.PushFindings(cmd.Context(), eid, findings); err != nil {
+				return fmt.Errorf("defectdojo push: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "  Pushed %d findings to DefectDojo engagement %d\n", len(findings), eid)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&djURL, "url", "", "DefectDojo base URL (e.g. https://dojo.example.com)")
+	cmd.Flags().StringVar(&djAPIKey, "api-key", "", "DefectDojo API token")
+	cmd.Flags().StringVar(&findingsFile, "findings", "", "path to findings JSON file (- for stdin)")
+	cmd.Flags().IntVar(&productID, "product", 0, "DefectDojo product ID (used when creating a new engagement)")
+	cmd.Flags().IntVar(&engagementID, "engagement-id", 0, "existing DefectDojo engagement ID")
+	_ = cmd.MarkFlagRequired("url")
+	_ = cmd.MarkFlagRequired("api-key")
+	_ = cmd.MarkFlagRequired("findings")
+	return cmd
 }

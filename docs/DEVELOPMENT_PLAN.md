@@ -153,7 +153,7 @@ Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pad
 ### Test
 
 - [x] Tambah regression test `TestCapConfidence_IncreasesWithMoreImports` — membuktikan confidence naik sesuai jumlah import
-- [ ] Test end-to-end: `scan → gate → exit code` benar
+- [x] Test end-to-end: `scan → gate → exit code` benar (`internal/quality/e2e_test.go` — 6 skenario: critical/high/low/empty/mixed/reachability policy)
 
 ---
 
@@ -163,22 +163,23 @@ Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pad
 
 ### Dependency-Track CLI
 
-- [ ] `supplychain-kit deptrack upload --url <dt-url> --api-key <key> --sbom sbom.json` — upload SBOM ke Dependency-Track
-- [ ] `supplychain-kit deptrack status --url <dt-url> --api-key <key> --project <id>` — polling status vulnerability
-- [ ] `supplychain-kit deptrack sync --repo .` — kombinasi: scan SBOM lalu langsung upload
-- [ ] Support konfigurasi via `configs/aspm.yaml` (url, api-key, project-id)
-- [ ] Graceful degradation: jika Dependency-Track tidak tersedia, lanjut tanpa error fatal
+- [x] `supplychain-kit deptrack upload --url <dt-url> --api-key <key> --sbom sbom.json` — upload SBOM ke Dependency-Track
+- [x] `supplychain-kit deptrack status --url <dt-url> --api-key <key> --project <id>` — polling status vulnerability
+- [x] `supplychain-kit deptrack sync --repo .` — kombinasi: scan SBOM lalu langsung upload
+- [x] Support konfigurasi via `configs/aspm.yaml` (url, api-key, project-id)
+- [x] Graceful degradation: jika Dependency-Track tidak tersedia, lanjut tanpa error fatal
 
 ### DefectDojo CLI
 
-- [ ] `supplychain-kit defectdojo push --url <url> --api-key <key> --findings findings.json`
-- [ ] Map normalized findings ke DefectDojo finding format
-- [ ] Support `--engagement-id` dan `--product-id` sebagai parameter
+- [x] `supplychain-kit defectdojo push --url <url> --api-key <key> --findings findings.json`
+- [x] Map normalized findings ke DefectDojo finding format
+- [x] Support `--engagement-id` dan `--product` sebagai parameter
 
 ### Test
 
-- [ ] Mock HTTP client untuk test upload tanpa server nyata
-- [ ] Test `sync` command end-to-end dengan fixture SBOM
+- [x] Mock HTTP tests: `internal/deptrack/client_test.go` — 5 test cases (EnsureProject existing/create, UploadBOM, GetFindings, HTTP error)
+- [x] Mock HTTP tests: `internal/defectdojo/client_test.go` — 4 test cases (EnsureEngagement, PushFindings, empty findings, HTTP error)
+- [ ] Test `sync` command end-to-end dengan syft terinstall
 
 ---
 

@@ -1,17 +1,6 @@
-# ASPM platform configuration. All values can be overridden by environment
-# variables prefixed with ASPM_ (dots become underscores).
-
-http:
-  addr: ":8080"
-  read_timeout_sec: 30
-
-database:
-  dsn: "postgres://aspm:aspm@localhost:5432/aspm?sslmode=disable"
-  max_conns: 10
-  auto_migrate: true
-
-redis:
-  url: "redis://localhost:6379/0"
+# supplychain-kit CLI configuration.
+# All values can be overridden by ASPM_-prefixed environment variables
+# (dots become underscores, e.g. ASPM_SCANNERS_WORK_DIR).
 
 scanners:
   work_dir: "/tmp/aspm-work"
@@ -20,14 +9,28 @@ scanners:
   max_parallel_sast: 2
   grype_db_max_age_hrs: 24
 
-remediation:
-  base_url: "http://localhost:9090"
-  llm_provider: "anthropic"   # anthropic | openai | noop
-
-# Quality Gate policy. The CLI exits non-zero when fail_on triggers and exit
-# code 1 when warn_on triggers (but no fail_on rule fires).
+# Quality Gate policy. CLI exits 2 when fail_on triggers, 1 when warn_on triggers.
 quality_gate:
   fail_on:
     - severity: critical
   warn_on:
     - severity: high
+
+# Dependency-Track integration (optional).
+# Used by: supplychain-kit deptrack upload/status/sync
+# Can also be set via --url and --api-key flags instead.
+#
+# dependency_track:
+#   url: "https://deptrack.example.com"
+#   api_key: "your-api-key"
+#   default_project: "myapp"
+#   default_version: "latest"
+
+# DefectDojo integration (optional).
+# Used by: supplychain-kit defectdojo push
+# Can also be set via --url and --api-key flags instead.
+#
+# defect_dojo:
+#   url: "https://dojo.example.com"
+#   api_key: "your-api-token"
+#   default_product_id: 1

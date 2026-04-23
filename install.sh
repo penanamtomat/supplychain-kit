@@ -8,36 +8,28 @@
 #
 # What this script does:
 #   1. Verify prerequisites  (Go, git, curl)
-#   2. Install scanner tools (syft, grype, trivy, osv-scanner, gitleaks, semgrep)
+#   2. Install scanner tools (syft, grype, trivy, osv-scanner, gitleaks, semgrep, joern)
 #   3. Build supplychain-kit binary from source
 #   4. Install supplychain-kit into a directory on PATH
 #   5. Print PATH setup instructions when needed
 #
 # Usage:
-#   bash install.sh                        # full install
+#   bash install.sh                        # full install (always fetches latest versions)
 #   bash install.sh --no-semgrep           # skip semgrep (no Python)
+#   bash install.sh --no-trivy             # skip trivy
+#   bash install.sh --no-osv               # skip osv-scanner
+#   bash install.sh --no-joern             # skip joern (large download, Java required)
 #   bash install.sh --prefix /usr/local    # custom install prefix
 #   bash install.sh --help
 #
-# Environment overrides:
-#   INSTALL_DIR        destination for supplychain-kit  (default: ~/.local/bin)
-#   GITLEAKS_VERSION   gitleaks release to fetch (default: 8.21.2)
-#   SEMGREP_VERSION    semgrep release to install (default: 1.75.0)
-#   TRIVY_VERSION      trivy release to fetch (default: 0.61.0)
-#   OSV_VERSION        osv-scanner release to fetch (default: 1.9.2)
+# All scanner tools are installed at their LATEST release automatically.
+# Override a specific version via environment variables if needed:
+#   GITLEAKS_VERSION=8.21.2 bash install.sh
+#   TRIVY_VERSION=0.70.0 bash install.sh
 
 set -euo pipefail
 
-# ── defaults ──────────────────────────────────────────────────────────────────
-GITLEAKS_VERSION="${GITLEAKS_VERSION:-8.21.2}"
-SEMGREP_VERSION="${SEMGREP_VERSION:-1.75.0}"
-TRIVY_VERSION="${TRIVY_VERSION:-0.61.0}"
-OSV_VERSION="${OSV_VERSION:-1.9.2}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BINARY_NAME="supplychain-kit"
-
 # ── colours ───────────────────────────────────────────────────────────────────
-# Disable colours when not writing to a terminal.
 if [ -t 1 ]; then
   RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
   CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -55,13 +47,15 @@ check()   { command -v "$1" &>/dev/null; }
 SKIP_SEMGREP=false
 SKIP_TRIVY=false
 SKIP_OSV=false
-INSTALL_DIR="${INSTALL_DIR:-}"   # resolved after OS detection
+SKIP_JOERN=false
+INSTALL_DIR="${INSTALL_DIR:-}"
 
 for arg in "$@"; do
   case "$arg" in
     --no-semgrep)   SKIP_SEMGREP=true ;;
     --no-trivy)     SKIP_TRIVY=true ;;
     --no-osv)       SKIP_OSV=true ;;
+    --no-joern)     SKIP_JOERN=true ;;
     --prefix)       shift; INSTALL_DIR="$1" ;;
     --prefix=*)     INSTALL_DIR="${arg#--prefix=}" ;;
     --help|-h)
@@ -72,6 +66,7 @@ Options:
   --no-semgrep        Skip semgrep installation (requires Python/pip)
   --no-trivy          Skip trivy installation
   --no-osv            Skip osv-scanner installation
+  --no-joern          Skip joern installation (large ~500MB download, requires Java)
   --prefix <dir>      Install supplychain-kit and scanner tools to <dir>
                       (default: ~/.local/bin on Linux/Windows,
                                 /usr/local/bin on macOS if writable)
@@ -79,15 +74,12 @@ Options:
 
 Environment variables:
   INSTALL_DIR         Same as --prefix
-  GITLEAKS_VERSION    gitleaks version to download  (default: ${GITLEAKS_VERSION})
-  SEMGREP_VERSION     semgrep version to install    (default: ${SEMGREP_VERSION})
-  TRIVY_VERSION       trivy version to download     (default: ${TRIVY_VERSION})
-  OSV_VERSION         osv-scanner version to fetch  (default: ${OSV_VERSION})
+  GITLEAKS_VERSION    Pin gitleaks version  (default: latest)
+  TRIVY_VERSION       Pin trivy version     (default: latest)
+  OSV_VERSION         Pin osv-scanner version (default: latest)
+  SEMGREP_VERSION     Pin semgrep version   (default: latest)
 
-Examples:
-  bash install.sh
-  bash install.sh --no-semgrep
-  INSTALL_DIR=/opt/aspm bash install.sh
+By default all tools are fetched at their latest release.
 EOF
       exit 0
       ;;
@@ -119,12 +111,10 @@ case "$_uname_m" in
     ;;
 esac
 
-# Windows binaries carry .exe; archives use .zip instead of .tar.gz.
 EXT=""
 ARCHIVE_EXT="tar.gz"
 [ "$OS" = "windows" ] && { EXT=".exe"; ARCHIVE_EXT="zip"; }
 
-# Resolve INSTALL_DIR default per-OS.
 if [ -z "$INSTALL_DIR" ]; then
   if [ "$OS" = "darwin" ] && [ -w "/usr/local/bin" ]; then
     INSTALL_DIR="/usr/local/bin"
@@ -133,7 +123,10 @@ if [ -z "$INSTALL_DIR" ]; then
   fi
 fi
 
-# ── shell-profile detection (for PATH hint) ───────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BINARY_NAME="supplychain-kit"
+
+# ── shell-profile detection ───────────────────────────────────────────────────
 detect_shell_profile() {
   local sh
   sh="$(basename "${SHELL:-bash}")"
@@ -141,18 +134,15 @@ detect_shell_profile() {
     zsh)  echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
     fish) echo "$HOME/.config/fish/config.fish" ;;
     *)
-      # bash: macOS uses ~/.bash_profile, Linux/Windows use ~/.bashrc
       [ "$OS" = "darwin" ] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc"
       ;;
   esac
 }
-
 SHELL_PROFILE="$(detect_shell_profile)"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 ensure_install_dir() {
   mkdir -p "$INSTALL_DIR"
-  # Warn once if not already on PATH.
   if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     warn "$INSTALL_DIR is not on your PATH."
     if [ "$OS" = "windows" ]; then
@@ -170,15 +160,29 @@ ensure_install_dir() {
   fi
 }
 
-# Portable binary copy with executable bit.
 copy_bin() {
   local src="$1" dst="$2"
   cp "$src" "$dst"
   chmod 0755 "$dst"
 }
 
+# Fetch latest release tag from GitHub API.
+# Usage: latest_release <owner/repo>
+# Respects env override: variable name derived from repo name.
+latest_release() {
+  local repo="$1"
+  local tag
+  tag="$(curl -fsSL --retry 3 "https://api.github.com/repos/${repo}/releases/latest" \
+    | grep '"tag_name"' | head -1 \
+    | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\?\([^"]*\)".*/\1/')"
+  if [ -z "$tag" ]; then
+    error "Could not resolve latest release for ${repo}"
+    return 1
+  fi
+  echo "$tag"
+}
+
 # Download a release archive (zip or tar.gz) and extract a named binary.
-# Usage: download_extract <url> <binary-name> <destination-path>
 download_extract() {
   local url="$1" binary="$2" dest="$3"
   local tmpdir; tmpdir="$(mktemp -d)"
@@ -193,15 +197,11 @@ download_extract() {
     return 1
   fi
 
-  # Extract based on archive type.
   if [[ "$url" == *.zip ]]; then
     if check unzip; then
       unzip -q "$archive" -d "$extract_dir"
     else
       error "unzip is required to extract .zip archives."
-      error "  Linux : sudo apt install unzip  /  sudo dnf install unzip"
-      error "  macOS : brew install unzip"
-      error "  Windows (Git Bash): unzip is usually bundled — update Git for Windows"
       rm -rf "$tmpdir"
       return 1
     fi
@@ -209,7 +209,6 @@ download_extract() {
     tar -xzf "$archive" -C "$extract_dir"
   fi
 
-  # Find the binary (with or without .exe extension).
   local found
   found="$(find "$extract_dir" -type f \( -name "$binary" -o -name "${binary}.exe" \) 2>/dev/null | head -1)"
   if [ -z "$found" ]; then
@@ -223,12 +222,10 @@ download_extract() {
 }
 
 # Run an official Anchore install script (syft or grype).
-# Falls back gracefully if the install script itself fails.
 anchore_install() {
-  local tool="$1"   # syft | grype
+  local tool="$1"
   local url="https://raw.githubusercontent.com/anchore/${tool}/main/install.sh"
   echo "  Downloading official ${tool} installer..."
-  # Pipe output through cat to prevent set -e from triggering on stderr lines.
   if curl -sSfL --retry 3 "$url" | sh -s -- -b "$INSTALL_DIR" 2>&1; then
     return 0
   else
@@ -260,78 +257,93 @@ section "Step 2/4 — Installing scanner tools"
 
 # ── syft ──────────────────────────────────────────────────────────────────────
 if check syft || [ -f "${INSTALL_DIR}/syft${EXT}" ]; then
-  info "syft already installed"
+  info "syft already installed ($(syft version 2>/dev/null | grep Version | awk '{print $2}' || echo '?'))"
 else
   echo "  Installing syft (latest stable)..."
   ensure_install_dir
   SYFT_OK=false
-
   if [ "$OS" = "darwin" ] && check brew; then
     brew install anchore/grype/syft --quiet 2>&1 | tail -1 && SYFT_OK=true
   elif anchore_install syft; then
     SYFT_OK=true
   fi
-
   $SYFT_OK && info "syft installed" \
            || warn "syft installation failed — SCA (SBOM generation) will be unavailable"
 fi
 
 # ── grype ─────────────────────────────────────────────────────────────────────
 if check grype || [ -f "${INSTALL_DIR}/grype${EXT}" ]; then
-  info "grype already installed"
+  info "grype already installed ($(grype version 2>/dev/null | grep Version | awk '{print $2}' || echo '?'))"
 else
   echo "  Installing grype (latest stable)..."
   ensure_install_dir
   GRYPE_OK=false
-
   if [ "$OS" = "darwin" ] && check brew; then
     brew install anchore/grype/grype --quiet 2>&1 | tail -1 && GRYPE_OK=true
   elif anchore_install grype; then
     GRYPE_OK=true
   fi
-
   $GRYPE_OK && info "grype installed" \
             || warn "grype installation failed — vulnerability matching will be unavailable"
 fi
 
 # ── trivy ─────────────────────────────────────────────────────────────────────
+# Uses the official Trivy install script (https://trivy.dev/docs/latest/getting-started/installation/)
+# which auto-detects OS, architecture, and always installs the latest release.
 if $SKIP_TRIVY; then
   warn "Skipping trivy (--no-trivy)"
 elif check trivy || [ -f "${INSTALL_DIR}/trivy${EXT}" ]; then
-  info "trivy already installed"
+  info "trivy already installed ($(trivy --version 2>/dev/null | grep Version | awk '{print $2}' || echo '?'))"
 else
-  echo "  Installing trivy v${TRIVY_VERSION}..."
+  echo "  Installing trivy (latest stable via official script)..."
   ensure_install_dir
   TRIVY_OK=false
 
   if [ "$OS" = "darwin" ] && check brew; then
     brew install aquasecurity/trivy/trivy --quiet 2>&1 | tail -1 && TRIVY_OK=true
-  else
-    # Trivy release filename pattern: trivy_<version>_<OS>-<ARCH>.<ext>
-    case "$OS" in
-      linux)
-        TV_ARCH="$ARCH"
-        [ "$TV_ARCH" = "amd64" ] && TV_ARCH="64bit"
-        [ "$TV_ARCH" = "arm64" ] && TV_ARCH="ARM64"
-        TV_ARCHIVE="trivy_${TRIVY_VERSION}_Linux-${TV_ARCH}.tar.gz"
-        ;;
-      darwin)
-        TV_ARCH="$ARCH"
-        [ "$TV_ARCH" = "amd64" ] && TV_ARCH="64bit"
-        [ "$TV_ARCH" = "arm64" ] && TV_ARCH="ARM64"
-        TV_ARCHIVE="trivy_${TRIVY_VERSION}_macOS-${TV_ARCH}.tar.gz"
-        ;;
-      windows)
-        TV_ARCHIVE="trivy_${TRIVY_VERSION}_windows-64bit.zip"
-        ;;
-    esac
-    TV_URL="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${TV_ARCHIVE}"
+  elif [ "$OS" = "linux" ]; then
+    # Prefer apt/rpm package managers for proper system integration.
+    if check apt-get && check wget; then
+      echo "    Setting up Trivy apt repository..."
+      wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+        | gpg --dearmor \
+        | tee /usr/share/keyrings/trivy.gpg >/dev/null 2>&1
+      echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+        | tee /etc/apt/sources.list.d/trivy.list >/dev/null
+      apt-get update -qq 2>/dev/null
+      apt-get install -y trivy >/dev/null 2>&1 && TRIVY_OK=true
+    elif check dnf || check yum; then
+      PKG_MGR="dnf"; check dnf || PKG_MGR="yum"
+      cat >/etc/yum.repos.d/trivy.repo <<'REPO'
+[trivy]
+name=Trivy repository
+baseurl=https://aquasecurity.github.io/trivy-repo/rpm/releases/$basearch/
+gpgcheck=1
+enabled=1
+gpgkey=https://aquasecurity.github.io/trivy-repo/rpm/public.key
+REPO
+      $PKG_MGR install -y trivy >/dev/null 2>&1 && TRIVY_OK=true
+    fi
+
+    # Fallback: official install script (works on any Linux).
+    if ! $TRIVY_OK; then
+      echo "    Falling back to official Trivy install script..."
+      if curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+          | sh -s -- -b "$INSTALL_DIR" 2>&1; then
+        TRIVY_OK=true
+      fi
+    fi
+  elif [ "$OS" = "windows" ]; then
+    # On Windows: resolve latest version then download zip.
+    TV_VERSION="${TRIVY_VERSION:-$(latest_release aquasecurity/trivy)}"
+    TV_ARCHIVE="trivy_${TV_VERSION}_windows-64bit.zip"
+    TV_URL="https://github.com/aquasecurity/trivy/releases/download/v${TV_VERSION}/${TV_ARCHIVE}"
     if download_extract "$TV_URL" "trivy" "${INSTALL_DIR}/trivy${EXT}"; then
       TRIVY_OK=true
     fi
   fi
 
-  $TRIVY_OK && info "trivy installed" \
+  $TRIVY_OK && info "trivy installed ($(trivy --version 2>/dev/null | grep Version | awk '{print $2}'))" \
             || warn "trivy installation failed — extended CVE coverage will be unavailable"
 fi
 
@@ -341,6 +353,7 @@ if $SKIP_OSV; then
 elif check osv-scanner || [ -f "${INSTALL_DIR}/osv-scanner${EXT}" ]; then
   info "osv-scanner already installed"
 else
+  OSV_VERSION="${OSV_VERSION:-$(latest_release google/osv-scanner)}"
   echo "  Installing osv-scanner v${OSV_VERSION}..."
   ensure_install_dir
   OSV_OK=false
@@ -348,7 +361,6 @@ else
   if [ "$OS" = "darwin" ] && check brew; then
     brew install osv-scanner --quiet 2>&1 | tail -1 && OSV_OK=true
   else
-    # osv-scanner ships as a single static binary (no archive needed).
     case "$OS-$ARCH" in
       linux-amd64)   OSV_BIN="osv-scanner_linux_amd64" ;;
       linux-arm64)   OSV_BIN="osv-scanner_linux_arm64" ;;
@@ -371,14 +383,15 @@ else
     fi
   fi
 
-  $OSV_OK && info "osv-scanner installed" \
+  $OSV_OK && info "osv-scanner installed (v${OSV_VERSION})" \
            || warn "osv-scanner installation failed — Google OSV database scan will be unavailable"
 fi
 
 # ── gitleaks ──────────────────────────────────────────────────────────────────
 if check gitleaks || [ -f "${INSTALL_DIR}/gitleaks${EXT}" ]; then
-  info "gitleaks already installed"
+  info "gitleaks already installed ($(gitleaks version 2>/dev/null || echo '?'))"
 else
+  GITLEAKS_VERSION="${GITLEAKS_VERSION:-$(latest_release gitleaks/gitleaks)}"
   echo "  Installing gitleaks v${GITLEAKS_VERSION}..."
   ensure_install_dir
   GITLEAKS_OK=false
@@ -386,7 +399,6 @@ else
   if [ "$OS" = "darwin" ] && check brew; then
     brew install gitleaks --quiet 2>&1 | tail -1 && GITLEAKS_OK=true
   else
-    # gitleaks uses x64 (not amd64) in its release filenames.
     GL_ARCH="$ARCH"
     [ "$GL_ARCH" = "amd64" ] && GL_ARCH="x64"
 
@@ -402,17 +414,15 @@ else
     fi
   fi
 
-  $GITLEAKS_OK && info "gitleaks installed" \
+  $GITLEAKS_OK && info "gitleaks installed (v${GITLEAKS_VERSION})" \
                || warn "gitleaks installation failed — secret scanning will be unavailable"
 fi
 
 # ── semgrep ───────────────────────────────────────────────────────────────────
-# semgrep_works: returns 0 if the installed semgrep binary actually executes.
 semgrep_works() {
   semgrep --version >/dev/null 2>&1
 }
 
-# ensure_pip3: try to install pip3 automatically on Linux if missing.
 ensure_pip3() {
   check pip3 && return 0
   check pip  && return 0
@@ -429,7 +439,6 @@ ensure_pip3() {
     apk add --no-cache py3-pip >/dev/null 2>&1 && check pip3 && return 0
   fi
 
-  # Fallback: bootstrap pip via ensurepip (available in Python 3.4+).
   if check python3; then
     python3 -m ensurepip --upgrade >/dev/null 2>&1 && check pip3 && return 0
   fi
@@ -442,42 +451,38 @@ if $SKIP_SEMGREP; then
 elif semgrep_works; then
   info "semgrep already installed: $(semgrep --version 2>/dev/null)"
 else
-  echo "  Installing semgrep v${SEMGREP_VERSION}..."
+  # Install latest semgrep (no version pin — pip resolves latest by default).
+  SEMGREP_INSTALL_ARG="semgrep"
+  # Allow pinning via env var for reproducible installs.
+  [ -n "${SEMGREP_VERSION:-}" ] && SEMGREP_INSTALL_ARG="semgrep==${SEMGREP_VERSION}"
+
+  echo "  Installing semgrep (latest stable)..."
   SEMGREP_OK=false
 
-  # macOS: prefer brew (includes native binary).
-  # Linux: auto-install pip3 if needed, then use pip3/pip/pipx.
-  # Windows: pip wheel installs but semgrep-core native binary is absent —
-  #   use WSL or Docker. See: https://semgrep.dev/docs/getting-started/
   if [ "$OS" = "darwin" ] && check brew; then
     brew install semgrep --quiet 2>&1 | tail -1 && SEMGREP_OK=true
   elif [ "$OS" = "windows" ]; then
-    : # handled below after post-install check
+    : # handled in post-install check below
   elif ensure_pip3; then
-    # Prefer --break-system-packages on modern Debian/Ubuntu (PEP 668).
     if check pip3; then
-      pip3 install --quiet --break-system-packages "semgrep==${SEMGREP_VERSION}" 2>/dev/null \
-        || pip3 install --quiet "semgrep==${SEMGREP_VERSION}" 2>/dev/null
+      pip3 install --quiet --break-system-packages "$SEMGREP_INSTALL_ARG" 2>/dev/null \
+        || pip3 install --quiet "$SEMGREP_INSTALL_ARG" 2>/dev/null
       semgrep_works && SEMGREP_OK=true
     elif check pip; then
-      pip install --quiet "semgrep==${SEMGREP_VERSION}" 2>/dev/null
+      pip install --quiet "$SEMGREP_INSTALL_ARG" 2>/dev/null
       semgrep_works && SEMGREP_OK=true
     fi
   fi
 
-  # pipx fallback (any OS).
   if ! $SEMGREP_OK && check pipx; then
-    pipx install "semgrep==${SEMGREP_VERSION}" >/dev/null 2>&1 && semgrep_works && SEMGREP_OK=true
+    pipx install "$SEMGREP_INSTALL_ARG" >/dev/null 2>&1 && semgrep_works && SEMGREP_OK=true
   fi
 
-  # Post-install sanity check: pip install may succeed but semgrep may not run
-  # (known issue on Windows where the native semgrep-core binary is absent).
   if $SEMGREP_OK && ! semgrep_works; then
     SEMGREP_OK=false
     if [ "$OS" = "windows" ]; then
       warn "semgrep installed via pip but cannot run on Windows (native binary missing)."
-      warn "Workaround — use WSL and run semgrep from there:"
-      warn "  wsl bash install.sh"
+      warn "Workaround — use WSL: wsl bash install.sh"
       warn "SAST code analysis will be skipped on native Windows."
     fi
   fi
@@ -490,12 +495,78 @@ else
       warn "Run install.sh inside WSL for full SAST support."
     else
       warn "semgrep installation failed — SAST code analysis will be unavailable."
-      warn "Install manually: pip3 install semgrep==${SEMGREP_VERSION}"
+      warn "Install manually: pip3 install semgrep"
     fi
   fi
 fi
 
-# ── step 3: build supplychain-kit from source ───────────────────────────────────────
+# ── joern ─────────────────────────────────────────────────────────────────────
+# Joern provides static reachability analysis (CPG traversal).
+# Requires Java 11+. Large download (~500MB). Skip with --no-joern.
+joern_works() {
+  command -v joern-parse >/dev/null 2>&1 && command -v joern-export >/dev/null 2>&1
+}
+
+if $SKIP_JOERN; then
+  warn "Skipping joern (--no-joern) — reachability engine will use fallback (unknown)"
+elif joern_works; then
+  info "joern already installed (joern-parse + joern-export on PATH)"
+else
+  echo "  Installing joern (latest stable — requires Java 11+)..."
+  JOERN_OK=false
+
+  # Verify Java is available (Joern is JVM-based).
+  if ! check java; then
+    warn "Java not found — joern requires Java 11+."
+    if [ "$OS" = "linux" ] && check apt-get; then
+      echo "    Installing Java 17 (headless)..."
+      apt-get install -y openjdk-17-jre-headless >/dev/null 2>&1 && check java || true
+    elif [ "$OS" = "darwin" ] && check brew; then
+      brew install --quiet openjdk@17 2>&1 | tail -1 || true
+    fi
+    if ! check java; then
+      warn "Could not install Java automatically."
+      warn "Install Java 11+ manually, then re-run: bash install.sh"
+      warn "Reachability engine will fall back to unknown until joern is available."
+    fi
+  fi
+
+  if check java; then
+    # Use the official joern-install.sh — always fetches the latest release.
+    JOERN_INSTALL_DIR="${HOME}/.local/share/joern"
+    echo "    Downloading joern-install.sh..."
+    if curl -fsSL --retry 3 \
+        https://raw.githubusercontent.com/joernio/joern/master/joern-install.sh \
+        -o /tmp/joern-install.sh; then
+      chmod +x /tmp/joern-install.sh
+      # Install joern to a fixed directory so we can symlink the binaries.
+      if bash /tmp/joern-install.sh --install-dir="$JOERN_INSTALL_DIR" 2>&1; then
+        JOERN_CLI="${JOERN_INSTALL_DIR}/joern-cli"
+        # Symlink joern-parse and joern-export into INSTALL_DIR.
+        ensure_install_dir
+        for bin in joern-parse joern-export joern; do
+          BIN_PATH="${JOERN_CLI}/${bin}"
+          if [ -f "$BIN_PATH" ]; then
+            ln -sf "$BIN_PATH" "${INSTALL_DIR}/${bin}"
+            chmod 0755 "${INSTALL_DIR}/${bin}"
+          fi
+        done
+        joern_works && JOERN_OK=true
+      fi
+    fi
+    rm -f /tmp/joern-install.sh
+  fi
+
+  if $JOERN_OK; then
+    info "joern installed (joern-parse + joern-export)"
+  else
+    warn "joern installation failed — reachability engine will use fallback (unknown)"
+    warn "Install manually: curl -fsSL https://raw.githubusercontent.com/joernio/joern/master/joern-install.sh | bash"
+    warn "Then add joern-cli/ to your PATH."
+  fi
+fi
+
+# ── step 3: build supplychain-kit from source ──────────────────────────────────
 section "Step 3/4 — Building supplychain-kit from source"
 
 cd "$SCRIPT_DIR"
@@ -509,7 +580,7 @@ BINARY_PATH="${SCRIPT_DIR}/bin/${BINARY_NAME}${EXT}"
 go build -ldflags="-s -w" -o "$BINARY_PATH" ./cmd/supplychain-kit/...
 info "Binary built → ${BINARY_PATH}"
 
-# ── step 4: install supplychain-kit to PATH ─────────────────────────────────────────
+# ── step 4: install supplychain-kit to PATH ─────────────────────────────────────
 section "Step 4/4 — Installing supplychain-kit"
 
 ensure_install_dir
@@ -523,8 +594,7 @@ echo -e "${BOLD}${GREEN}  supplychain-kit installed successfully!   ${RESET}"
 echo -e "${BOLD}${GREEN}════════════════════════════════════════════${RESET}"
 echo ""
 echo -e "${BOLD}Scanner tools:${RESET}"
-for bin in syft grype trivy osv-scanner gitleaks semgrep; do
-  # Accept both PATH resolution and direct presence in INSTALL_DIR.
+for bin in syft grype trivy osv-scanner gitleaks semgrep joern-parse joern-export; do
   if check "$bin" || [ -f "${INSTALL_DIR}/${bin}" ] || [ -f "${INSTALL_DIR}/${bin}.exe" ]; then
     echo -e "  ${GREEN}✓${RESET} ${bin}"
   else
@@ -533,7 +603,6 @@ for bin in syft grype trivy osv-scanner gitleaks semgrep; do
 done
 echo -e "  ${GREEN}✓${RESET} supplychain-kit → ${INSTALL_DIR}/${BINARY_NAME}${EXT}"
 
-# PATH setup hint — only shown when needed.
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo ""
   echo -e "${YELLOW}${BOLD}PATH setup required:${RESET}"
@@ -557,7 +626,6 @@ echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode sast${RESE
 echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode all --target myapp${RESET}"
 echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --out findings.json${RESET}"
 echo -e "  ${CYAN}supplychain-kit sbom --repo /path/to/project --out sbom.json${RESET}"
-echo -e "  ${CYAN}supplychain-kit sbom --repo /path/to/project --target myapp${RESET}"
 echo -e "  ${CYAN}supplychain-kit gate --findings findings.json${RESET}"
 echo ""
 echo -e "To uninstall: ${YELLOW}bash uninstall.sh${RESET}"

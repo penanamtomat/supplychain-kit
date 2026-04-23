@@ -131,21 +131,21 @@ Saat ini syft dan grype berjalan secara concurrent, padahal grype membutuhkan SB
 
 ### Static Reachability (CPG via Joern)
 
-- [ ] Parser CPG GraphSON JSON dari export Joern
-- [ ] Graph traversal dari first-party sources ke third-party sinks
-- [ ] Ekstraksi sinks dari affected function symbols di metadata Grype
-- [ ] Output per finding: `reachable bool`, `confidence float64`, `path []string`
-- [ ] Fallback: jika Joern tidak tersedia, default `reachable = true` (conservative)
+- [x] Parser CPG GraphSON JSON dari export Joern
+- [x] Graph traversal dari first-party sources ke third-party sinks
+- [x] Ekstraksi sinks dari affected function symbols di metadata Grype
+- [x] Output per finding: `reachable bool`, `confidence float64`, `path []string`
+- [x] Fallback: jika Joern tidak tersedia, default `reachable = unknown` (conservative)
 
 ### Risk Score Update
 
-- [ ] Reachability multiplier terintegrasi ke scoring: `0.1` (unreachable) atau `1.0` (reachable)
-- [ ] Output tabel menampilkan kolom `reachable` dan `risk_score`
+- [x] Reachability multiplier terintegrasi ke scoring: `0.1` (unreachable) atau `1.0` (reachable)
+- [x] Output tabel menampilkan kolom `reachable` dan `risk_score`
 
 ### eBPF Runtime Confirmation _(opsional, Linux kernel 5.8+)_
 
-- [ ] Interface `RuntimeConfirmer` di `internal/reachability/`
-- [ ] Graceful degradation jika tidak tersedia
+- [x] Interface `RuntimeConfirmer` di `internal/reachability/`
+- [x] Graceful degradation jika tidak tersedia
 
 ---
 

@@ -122,6 +122,9 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]*models.Fi
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 100
 	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, asset_id, scan_run_id, rule_id, title, severity, cvss,
 		       file_path, line, package, version, fixed_version,
@@ -170,6 +173,35 @@ func (s *Store) FinishScanRun(ctx context.Context, id, status, errMsg string) er
 		UPDATE scan_runs SET finished_at = $1, status = $2, error = $3 WHERE id = $4
 	`, time.Now(), status, errMsg, id)
 	return err
+}
+
+// AssetRiskSummary computes risk aggregates for an asset entirely in the DB,
+// avoiding the 500-row cap that in-memory approaches impose.
+type AssetRiskSummary struct {
+	AssetID        string  `json:"asset_id"`
+	FindingCount   int     `json:"finding_count"`
+	MaxRiskScore   float64 `json:"max_risk_score"`
+	AvgRiskScore   float64 `json:"avg_risk_score"`
+	ReachableCount int     `json:"reachable_count"`
+	CriticalCount  int     `json:"critical_count"`
+}
+
+func (s *Store) AssetRiskSummary(ctx context.Context, assetID string) (*AssetRiskSummary, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+		  COUNT(*)                                                        AS finding_count,
+		  COALESCE(MAX(risk_score), 0)                                   AS max_risk_score,
+		  COALESCE(AVG(risk_score), 0)                                   AS avg_risk_score,
+		  COUNT(*) FILTER (WHERE reachability IN ('reachable','confirmed')) AS reachable_count,
+		  COUNT(*) FILTER (WHERE severity = 'critical')                  AS critical_count
+		FROM findings
+		WHERE asset_id = $1
+	`, assetID)
+	out := &AssetRiskSummary{AssetID: assetID}
+	if err := row.Scan(&out.FindingCount, &out.MaxRiskScore, &out.AvgRiskScore, &out.ReachableCount, &out.CriticalCount); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // --- SBOMs ---

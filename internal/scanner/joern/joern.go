@@ -51,6 +51,8 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 	if err := os.MkdirAll(filepath.Dir(cpgBin), 0o755); err != nil {
 		return out, err
 	}
+	// joern-export fails if the output directory already exists (e.g. re-runs).
+	_ = os.RemoveAll(cpgExport)
 
 	parse := exec.CommandContext(ctx, a.parseBinary, req.CheckoutDir, "--output", cpgBin)
 	parse.Stderr = os.Stderr

@@ -531,6 +531,16 @@ else
     fi
   fi
 
+  # joern-install.sh also requires unzip.
+  if check java && ! check unzip; then
+    echo "    Installing unzip (required by joern)..."
+    if check apt-get; then
+      apt-get install -y unzip >/dev/null 2>&1 || true
+    elif check dnf || check yum; then
+      ${DNF_OR_YUM:-yum} install -y unzip >/dev/null 2>&1 || true
+    fi
+  fi
+
   if check java; then
     # Use the official joern-install.sh — always fetches the latest release.
     JOERN_INSTALL_DIR="${HOME}/.local/share/joern"

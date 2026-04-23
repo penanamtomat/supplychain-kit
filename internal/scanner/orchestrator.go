@@ -100,7 +100,7 @@ func (r *Registry) runTwoPhase(ctx context.Context, req Request) ([]ScannedResul
 	} else {
 		// syft did not produce an SBOM — remove grype from phase 2 so it
 		// doesn't run against a non-existent file.
-		filtered := phase2[:0]
+		var filtered []Scanner
 		for _, s := range phase2 {
 			if s.Name() == "grype" {
 				log.Warn().Msg("syft did not produce SBOM — skipping grype")
@@ -128,18 +128,27 @@ func (r *Registry) runTwoPhase(ctx context.Context, req Request) ([]ScannedResul
 }
 
 func gitClone(ctx context.Context, url, ref, dest string) error {
+	safeEnv := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false")
+
 	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", url, dest)
+	cmd.Env = safeEnv
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git clone: %w", err)
 	}
 	if ref != "" && ref != "HEAD" {
 		fetch := exec.CommandContext(ctx, "git", "-C", dest, "fetch", "origin", ref)
+		fetch.Env = safeEnv
 		fetch.Stderr = os.Stderr
-		_ = fetch.Run()
+		if err := fetch.Run(); err != nil {
+			return fmt.Errorf("git fetch %s: %w", ref, err)
+		}
 		checkout := exec.CommandContext(ctx, "git", "-C", dest, "checkout", ref)
+		checkout.Env = safeEnv
 		checkout.Stderr = os.Stderr
-		_ = checkout.Run()
+		if err := checkout.Run(); err != nil {
+			return fmt.Errorf("git checkout %s: %w", ref, err)
+		}
 	}
 	return nil
 }

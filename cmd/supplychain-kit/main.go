@@ -120,7 +120,10 @@ Target:
 
 			// Target mode: write all reports to results/<target>/
 			if target != "" {
-				targetDir := resolveTargetDir(target)
+				targetDir, err := resolveTargetDir(target)
+				if err != nil {
+					return err
+				}
 				if err := os.MkdirAll(targetDir, 0o755); err != nil {
 					return fmt.Errorf("create target dir: %w", err)
 				}
@@ -151,11 +154,20 @@ Target:
 }
 
 // resolveTargetDir returns the absolute path to results/<target>.
-func resolveTargetDir(target string) string {
+// It rejects targets that would escape the results/ base directory.
+func resolveTargetDir(target string) (string, error) {
 	if target == "" {
-		return "results"
+		return "results", nil
 	}
-	return filepath.Join("results", target)
+	base, err := filepath.Abs("results")
+	if err != nil {
+		return "", err
+	}
+	resolved := filepath.Clean(filepath.Join(base, target))
+	if !strings.HasPrefix(resolved, base+string(filepath.Separator)) && resolved != base {
+		return "", fmt.Errorf("invalid target %q: must not escape results/ directory", target)
+	}
+	return resolved, nil
 }
 
 // inferTargetName extracts a target name from a repo path or URL.
@@ -514,7 +526,10 @@ Formats:
 
 					// Target mode: save to results/<target>/sbom.json
 					if target != "" {
-						targetDir := resolveTargetDir(target)
+						targetDir, err := resolveTargetDir(target)
+						if err != nil {
+							return err
+						}
 						if err := os.MkdirAll(targetDir, 0o755); err != nil {
 							return fmt.Errorf("create target dir: %w", err)
 						}
@@ -641,7 +656,10 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			engagement := args[0]
 
-			targetDir := resolveTargetDir(engagement)
+			targetDir, err := resolveTargetDir(engagement)
+			if err != nil {
+				return err
+			}
 			if err := os.MkdirAll(targetDir, 0o755); err != nil {
 				return fmt.Errorf("create engagement dir: %w", err)
 			}

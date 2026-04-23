@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -15,6 +16,14 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 	"github.com/penanamtomat/supplychain-kit/internal/quality"
 	"github.com/penanamtomat/supplychain-kit/internal/storage"
+)
+
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+var (
+	validSeverities    = map[string]bool{"critical": true, "high": true, "medium": true, "low": true, "info": true}
+	validReachability  = map[string]bool{"unknown": true, "unreachable": true, "reachable": true, "confirmed": true}
+	allowedURLPrefixes = []string{"https://", "http://", "git@", "ssh://"}
 )
 
 // Handlers groups every HTTP handler so dependencies are injected once.
@@ -33,6 +42,7 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 
 // CreateScan enqueues a new scan job.
 func (h *Handlers) CreateScan(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var req struct {
 		AssetID string `json:"asset_id"`
 		RepoURL string `json:"repo_url"`
@@ -45,6 +55,10 @@ func (h *Handlers) CreateScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RepoURL == "" {
 		writeError(w, http.StatusBadRequest, "repo_url required")
+		return
+	}
+	if !isAllowedURL(req.RepoURL) {
+		writeError(w, http.StatusBadRequest, "repo_url scheme not allowed")
 		return
 	}
 	scanReq := models.ScanRequest{
@@ -71,10 +85,20 @@ func (h *Handlers) GetScan(w http.ResponseWriter, r *http.Request) {
 // ListFindings is a paginated, filterable view over findings.
 func (h *Handlers) ListFindings(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	sev := q.Get("severity")
+	reach := q.Get("reachability")
+	if sev != "" && !validSeverities[sev] {
+		writeError(w, http.StatusBadRequest, "invalid severity value")
+		return
+	}
+	if reach != "" && !validReachability[reach] {
+		writeError(w, http.StatusBadRequest, "invalid reachability value")
+		return
+	}
 	filter := storage.FindingFilter{
 		AssetID:      q.Get("asset_id"),
-		Severity:     models.Severity(q.Get("severity")),
-		Reachability: models.Reachability(q.Get("reachability")),
+		Severity:     models.Severity(sev),
+		Reachability: models.Reachability(reach),
 	}
 	findings, err := h.Store.ListFindings(r.Context(), filter)
 	if err != nil {
@@ -91,6 +115,7 @@ func (h *Handlers) GetFinding(w http.ResponseWriter, r *http.Request) {
 
 // UpsertAsset accepts an Asset payload and persists it.
 func (h *Handlers) UpsertAsset(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var a models.Asset
 	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
@@ -119,44 +144,18 @@ func (h *Handlers) GetAsset(w http.ResponseWriter, r *http.Request) {
 // AssetRisk returns a rolled-up risk summary for the asset.
 func (h *Handlers) AssetRisk(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	findings, err := h.Store.ListFindings(r.Context(), storage.FindingFilter{AssetID: id, Limit: 500})
+	risk, err := h.Store.AssetRiskSummary(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	summary := struct {
-		AssetID         string  `json:"asset_id"`
-		FindingCount    int     `json:"finding_count"`
-		MaxRiskScore    float64 `json:"max_risk_score"`
-		AvgRiskScore    float64 `json:"avg_risk_score"`
-		ReachableCount  int     `json:"reachable_count"`
-		CriticalCount   int     `json:"critical_count"`
-	}{AssetID: id}
-
-	var sum float64
-	for _, f := range findings {
-		summary.FindingCount++
-		sum += f.RiskScore
-		if f.RiskScore > summary.MaxRiskScore {
-			summary.MaxRiskScore = f.RiskScore
-		}
-		if f.Reachability == models.ReachReachable || f.Reachability == models.ReachConfirmed {
-			summary.ReachableCount++
-		}
-		if f.Severity == models.SeverityCritical {
-			summary.CriticalCount++
-		}
-	}
-	if summary.FindingCount > 0 {
-		summary.AvgRiskScore = sum / float64(summary.FindingCount)
-	}
-	writeJSON(w, http.StatusOK, summary)
+	writeJSON(w, http.StatusOK, risk)
 }
 
 // EvaluateGate runs the quality gate against a supplied finding set (typically
 // produced by `supplychain-kit scan` and POSTed during CI).
 func (h *Handlers) EvaluateGate(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	var req struct {
 		Findings []*models.Finding `json:"findings"`
 	}
@@ -215,6 +214,15 @@ func (h *Handlers) AgenticSAST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.AgenticAgent.Handler()(w, r)
+}
+
+func isAllowedURL(u string) bool {
+	for _, prefix := range allowedURLPrefixes {
+		if strings.HasPrefix(u, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultStr(v, fallback string) string {

@@ -13,8 +13,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import textwrap
 from typing import Literal
+
+_MAX_SNIPPET_CHARS = 4000
+_MAX_DESC_CHARS = 1000
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 from pydantic import BaseModel
 
@@ -119,7 +124,15 @@ class LLMRemediationAgent:
             provider="noop",
         )
 
+    @staticmethod
+    def _sanitize(text: str, max_chars: int) -> str:
+        """Strip control characters and clamp length to prevent prompt injection."""
+        text = _CONTROL_CHARS_RE.sub("", text)
+        return text[:max_chars]
+
     def _build_prompt(self, rule_id, file_path, line, snippet, desc) -> str:
+        safe_snippet = self._sanitize(snippet, _MAX_SNIPPET_CHARS)
+        safe_desc = self._sanitize(desc, _MAX_DESC_CHARS)
         return textwrap.dedent(
             f"""
             You are a senior security engineer reviewing a pull request.
@@ -128,11 +141,11 @@ class LLMRemediationAgent:
 
             - Rule ID: {rule_id}
             - File: {file_path}:{line}
-            - Rule explanation: {desc}
+            - Rule explanation: {safe_desc}
 
             Snippet:
             ```
-            {snippet}
+            {safe_snippet}
             ```
 
             Respond with:

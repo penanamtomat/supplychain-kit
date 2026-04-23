@@ -634,6 +634,16 @@ func runCmd() *cobra.Command {
 		policy        string
 		semgrepConfig string
 		gitHistory    bool
+		// Dependency-Track integration (optional)
+		dtURL     string
+		dtAPIKey  string
+		dtProject string
+		dtVersion string
+		// DefectDojo integration (optional)
+		djURL        string
+		djAPIKey     string
+		djProductID  int
+		djEngageID   int
 	)
 	cmd := &cobra.Command{
 		Use:   "run <engagement>",
@@ -645,6 +655,8 @@ Steps performed automatically:
   2. Run scanner pipeline based on --mode
   3. Evaluate quality gate against policy
   4. Generate report files in results/<engagement>/
+  5. Upload SBOM to Dependency-Track  (if --dt-url is set)
+  6. Push findings to DefectDojo      (if --dj-url is set)
 
 Output files:
   results/<engagement>/findings.json   — full findings (machine-readable)
@@ -659,9 +671,9 @@ Exit codes:
 
 Examples:
   supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo
-  supplychain-kit run myapp-2026q1 --repo /path/to/project --mode sca
-  supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo --mode sast --ref main
-  supplychain-kit run myapp-2026q1 --repo . --policy configs/policy-strict.yaml`,
+  supplychain-kit run myapp-2026q1 --repo . --mode sca
+  supplychain-kit run myapp-2026q1 --repo . --dt-url https://dt.example.com --dt-api-key $DT_KEY --dt-project myapp
+  supplychain-kit run myapp-2026q1 --repo . --dj-url https://dojo.example.com --dj-api-key $DJ_KEY --dj-product 1`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			engagement := args[0]
@@ -748,7 +760,54 @@ Examples:
 				return fmt.Errorf("generate report: %w", err)
 			}
 
-			// Step 6: print results
+			// Step 5: upload SBOM to Dependency-Track (optional)
+			if dtURL != "" {
+				fmt.Fprintf(os.Stderr, "  Uploading SBOM to Dependency-Track ...\n")
+				sbomPath := filepath.Join(targetDir, "sbom.json")
+				if sbomRaw, readErr := os.ReadFile(sbomPath); readErr == nil {
+					project := dtProject
+					if project == "" {
+						project = engagement
+					}
+					ver := dtVersion
+					if ver == "" {
+						ver = "latest"
+					}
+					dtClient := deptrack.New(dtURL, dtAPIKey)
+					uuid, dtErr := dtClient.EnsureProject(cmd.Context(), project, ver)
+					if dtErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: deptrack ensure project: %v\n", dtErr)
+					} else if dtErr = dtClient.UploadBOM(cmd.Context(), uuid, sbomRaw); dtErr != nil {
+						fmt.Fprintf(os.Stderr, "  warn: deptrack upload: %v\n", dtErr)
+					} else {
+						fmt.Fprintf(os.Stderr, "  SBOM uploaded to Dependency-Track project %s\n", project)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "  warn: no sbom.json in %s — skipping Dependency-Track upload\n", targetDir)
+				}
+			}
+
+			// Step 6: push findings to DefectDojo (optional)
+			if djURL != "" {
+				fmt.Fprintf(os.Stderr, "  Pushing findings to DefectDojo ...\n")
+				djClient := defectdojo.New(djURL, djAPIKey)
+				eid := djEngageID
+				if eid == 0 {
+					eid, err = djClient.EnsureEngagement(cmd.Context(), djProductID, engagement)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  warn: defectdojo engagement: %v\n", err)
+						goto printResults
+					}
+				}
+				if pushErr := djClient.PushFindings(cmd.Context(), eid, merged); pushErr != nil {
+					fmt.Fprintf(os.Stderr, "  warn: defectdojo push: %v\n", pushErr)
+				} else {
+					fmt.Fprintf(os.Stderr, "  Pushed %d findings to DefectDojo engagement %d\n", len(merged), eid)
+				}
+			}
+
+		printResults:
+			// Step 7: print results
 			fmt.Fprintf(os.Stderr, "\n── Results saved to %s/ ─────────────────\n", targetDir)
 			fmt.Fprintf(os.Stderr, "  findings.json  — full findings (machine-readable)\n")
 			fmt.Fprintf(os.Stderr, "  findings.txt   — findings table\n")
@@ -773,6 +832,16 @@ Examples:
 	cmd.Flags().StringVar(&policy, "policy", "", "policy YAML (default: configs/aspm.yaml)")
 	cmd.Flags().StringVar(&semgrepConfig, "semgrep-config", "", "semgrep ruleset override (default: p/owasp-top-ten)")
 	cmd.Flags().BoolVar(&gitHistory, "git-history", false, "scan git commit history for secrets (gitleaks)")
+	// Dependency-Track flags (all optional)
+	cmd.Flags().StringVar(&dtURL, "dt-url", "", "Dependency-Track base URL (enables SBOM upload)")
+	cmd.Flags().StringVar(&dtAPIKey, "dt-api-key", "", "Dependency-Track API key")
+	cmd.Flags().StringVar(&dtProject, "dt-project", "", "Dependency-Track project name (defaults to <engagement>)")
+	cmd.Flags().StringVar(&dtVersion, "dt-version", "", "Dependency-Track project version (defaults to latest)")
+	// DefectDojo flags (all optional)
+	cmd.Flags().StringVar(&djURL, "dj-url", "", "DefectDojo base URL (enables findings push)")
+	cmd.Flags().StringVar(&djAPIKey, "dj-api-key", "", "DefectDojo API token")
+	cmd.Flags().IntVar(&djProductID, "dj-product", 0, "DefectDojo product ID (used when creating a new engagement)")
+	cmd.Flags().IntVar(&djEngageID, "dj-engagement-id", 0, "existing DefectDojo engagement ID (skips engagement creation)")
 	_ = cmd.MarkFlagRequired("repo")
 	return cmd
 }

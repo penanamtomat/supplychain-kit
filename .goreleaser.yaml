@@ -1,0 +1,99 @@
+version: 2
+
+project_name: supplychain-kit
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: supplychain-kit
+    main: ./cmd/supplychain-kit
+    binary: supplychain-kit
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE*
+      - configs/**/*
+      - install.sh
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Cosign keyless signing of checksums + binaries via GitHub OIDC.
+# Requires the release workflow to have `id-token: write` and `contents: write`.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: penanamtomat
+    name: supplychain-kit
+  draft: false
+  prerelease: auto
+  header: |
+    ## supplychain-kit {{ .Tag }}
+
+    Binaries are signed with [cosign](https://github.com/sigstore/cosign) (keyless, GitHub OIDC).
+    Each release also ships a CycloneDX SBOM per archive — the tool eats its own dog food.
+
+    Verify a download:
+    ```bash
+    cosign verify-blob \
+      --certificate-identity-regexp 'https://github.com/penanamtomat/supplychain-kit' \
+      --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+      --signature checksums.txt.sig \
+      --certificate checksums.txt.pem \
+      checksums.txt
+    ```

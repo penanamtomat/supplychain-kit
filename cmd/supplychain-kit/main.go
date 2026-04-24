@@ -18,6 +18,9 @@ import (
 
 	"github.com/penanamtomat/supplychain-kit/internal/config"
 	"github.com/penanamtomat/supplychain-kit/internal/correlation"
+	"github.com/penanamtomat/supplychain-kit/internal/defectdojo"
+	"github.com/penanamtomat/supplychain-kit/internal/deptrack"
+	kitmc "github.com/penanamtomat/supplychain-kit/internal/mcp"
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 	"github.com/penanamtomat/supplychain-kit/internal/quality"
 	"github.com/penanamtomat/supplychain-kit/internal/reachability"
@@ -29,8 +32,6 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/semgrep"
 	syftadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/syft"
 	trivyadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/trivy"
-	"github.com/penanamtomat/supplychain-kit/internal/defectdojo"
-	"github.com/penanamtomat/supplychain-kit/internal/deptrack"
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
 )
 
@@ -39,7 +40,7 @@ func main() {
 		Use:   "supplychain-kit",
 		Short: "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
 	}
-	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd())
+	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -1184,5 +1185,134 @@ func defectdojoPushCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("url")
 	_ = cmd.MarkFlagRequired("api-key")
 	_ = cmd.MarkFlagRequired("findings")
+	return cmd
+}
+
+// ── mcp command ───────────────────────────────────────────────────────────────
+
+func mcpCmd() *cobra.Command {
+	var printConfig bool
+	cmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "Start the supplychain-kit MCP server (stdio transport)",
+		Long: `Start supplychain-kit as an MCP server that Claude Code can call as tools.
+
+The server communicates via stdin/stdout using JSON-RPC (MCP protocol).
+Register it in Claude Code by adding the snippet from --print-config to
+~/.claude/mcp.json (or the project-level .claude/mcp.json).
+
+Tools exposed:
+  init_engagement    Bootstrap a new scan engagement
+  scan_repository    Run full SCA + SAST + reachability pipeline
+  generate_sbom      Generate CycloneDX SBOM via syft
+  run_gate           Evaluate findings against quality gate policy
+  analyze_finding    AI-powered remediation via Claude API
+  generate_report    Render Markdown (and optionally DOCX) report
+
+Examples:
+  supplychain-kit mcp                  # start server (Claude Code connects automatically)
+  supplychain-kit mcp --print-config   # print mcp.json snippet`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if printConfig {
+				kitmc.PrintConfig()
+				return nil
+			}
+			return kitmc.Serve(cmd.Context())
+		},
+	}
+	cmd.Flags().BoolVar(&printConfig, "print-config", false, "print ~/.claude/mcp.json registration snippet and exit")
+	return cmd
+}
+
+// ── init command ──────────────────────────────────────────────────────────────
+
+func initEngagementCmd() *cobra.Command {
+	var (
+		repo      string
+		policy    string
+		mode      string
+		outputDir string
+	)
+	cmd := &cobra.Command{
+		Use:   "init <engagement>",
+		Short: "Bootstrap a new scan engagement (creates results/<engagement>/ structure)",
+		Long: `Bootstrap a new scan engagement directory.
+
+Creates:
+  results/<engagement>/findings/
+  results/<engagement>/sbom/
+  results/<engagement>/reports/
+  results/<engagement>/state.json   (tracks pipeline progress)
+
+After init, run:
+  supplychain-kit run <engagement> --repo <path>    # full pipeline
+  /security-scan                                    # via Claude Code skill (agentic)
+
+Examples:
+  supplychain-kit init myapp-2026q1 --repo .
+  supplychain-kit init myapp-2026q1 --repo https://github.com/org/repo --policy strict`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			engagement := args[0]
+			if repo == "" {
+				return fmt.Errorf("--repo required")
+			}
+			if policy == "" {
+				policy = "moderate"
+			}
+			if mode == "" {
+				mode = "all"
+			}
+			if outputDir == "" {
+				outputDir = "results"
+			}
+
+			engDir, err := resolveTargetDir(engagement)
+			if err != nil {
+				return err
+			}
+			for _, sub := range []string{"findings", "sbom", "reports"} {
+				if err := os.MkdirAll(filepath.Join(engDir, sub), 0o755); err != nil {
+					return fmt.Errorf("create %s: %w", sub, err)
+				}
+			}
+
+			state := map[string]interface{}{
+				"engagement": engagement,
+				"repo":       repo,
+				"policy":     policy,
+				"mode":       mode,
+				"output_dir": outputDir,
+				"created_at": time.Now().UTC().Format(time.RFC3339),
+				"phases": map[string]string{
+					"init":   "done",
+					"sbom":   "pending",
+					"scan":   "pending",
+					"gate":   "pending",
+					"report": "pending",
+				},
+			}
+			raw, _ := json.MarshalIndent(state, "", "  ")
+			statePath := filepath.Join(engDir, "state.json")
+			if err := os.WriteFile(statePath, raw, 0o644); err != nil {
+				return fmt.Errorf("write state.json: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "\n── supplychain-kit init ──────────────────\n")
+			fmt.Fprintf(os.Stderr, "  Engagement : %s\n", engagement)
+			fmt.Fprintf(os.Stderr, "  Repository : %s\n", repo)
+			fmt.Fprintf(os.Stderr, "  Policy     : %s\n", policy)
+			fmt.Fprintf(os.Stderr, "  Mode       : %s\n", mode)
+			fmt.Fprintf(os.Stderr, "  Output     : %s/\n", engDir)
+			fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
+			fmt.Fprintf(os.Stderr, "  Next: supplychain-kit run %s --repo %s\n\n", engagement, repo)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "local path or remote git URL of the repository")
+	cmd.Flags().StringVar(&policy, "policy", "moderate", "policy preset: strict | moderate | permissive")
+	cmd.Flags().StringVar(&mode, "mode", "all", "scan mode: sca | sast | all")
+	cmd.Flags().StringVar(&outputDir, "out", "results", "base output directory")
+	_ = cmd.MarkFlagRequired("repo")
 	return cmd
 }

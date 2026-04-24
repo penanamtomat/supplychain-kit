@@ -43,7 +43,7 @@ func main() {
 		Use:   "supplychain-kit",
 		Short: "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
 	}
-	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), analyzeCmd(), reportCmd())
+	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), analyzeCmd(), reportCmd(), installHooksCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -1693,4 +1693,54 @@ func sortFindingsByPriority(findings []*models.Finding) {
 			}
 		}
 	}
+}
+
+// ── install-hooks command ─────────────────────────────────────────────────────
+
+func installHooksCmd() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "install-hooks",
+		Short: "Install the supplychain-kit git pre-commit hook into .git/hooks/",
+		Long: `Copy configs/hooks/pre-commit.sh into .git/hooks/pre-commit.
+
+The hook runs a fast SCA-only scan before every commit and blocks the commit
+if the quality gate fails.
+
+To bypass in an emergency: git commit --no-verify
+
+The Claude Code PostToolUse and Stop hooks are registered via .claude/settings.json
+and take effect automatically when Claude Code loads the project.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			src := filepath.Join("configs", "hooks", "pre-commit.sh")
+			if _, err := os.Stat(src); err != nil {
+				return fmt.Errorf("hook script not found at %s — are you in the supplychain-kit root?", src)
+			}
+
+			gitHooksDir := filepath.Join(".git", "hooks")
+			if _, err := os.Stat(gitHooksDir); err != nil {
+				return fmt.Errorf(".git/hooks not found — run from the root of a git repository")
+			}
+
+			dst := filepath.Join(gitHooksDir, "pre-commit")
+			if _, err := os.Stat(dst); err == nil && !force {
+				return fmt.Errorf("pre-commit hook already exists at %s — use --force to overwrite", dst)
+			}
+
+			raw, err := os.ReadFile(src)
+			if err != nil {
+				return fmt.Errorf("read hook script: %w", err)
+			}
+			if err := os.WriteFile(dst, raw, 0o755); err != nil {
+				return fmt.Errorf("write hook: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "  Installed: %s\n", dst)
+			fmt.Fprintf(os.Stderr, "  The hook runs 'supplychain-kit gate' before every commit.\n")
+			fmt.Fprintf(os.Stderr, "  Bypass: git commit --no-verify\n")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing pre-commit hook")
+	return cmd
 }

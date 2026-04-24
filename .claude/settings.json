@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__supplychain-kit__scan_repository",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/configs/hooks/post-scan.sh\"",
+            "statusMessage": "Summarising scan results...",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/configs/hooks/claude-stop.sh\"",
+            "statusMessage": "Summarising engagement state...",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 // Package mcp implements the supplychain-kit MCP server (stdio transport).
-// It exposes six tools that Claude Code uses to automate the full scan pipeline:
-// init_engagement, scan_repository, generate_sbom, run_gate, analyze_finding, generate_report.
+// It exposes five tools that Claude Code uses to automate the full scan pipeline:
+// init_engagement, scan_repository, generate_sbom, run_gate, generate_report.
 package mcp
 
 import (
@@ -17,7 +17,6 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"github.com/penanamtomat/supplychain-kit/internal/claudeai"
 	"github.com/penanamtomat/supplychain-kit/internal/config"
 	"github.com/penanamtomat/supplychain-kit/internal/correlation"
 	"github.com/penanamtomat/supplychain-kit/internal/models"
@@ -86,7 +85,6 @@ func New() *server.MCPServer {
 	s.AddTool(toolScanRepository(), handleScanRepository)
 	s.AddTool(toolGenerateSBOM(), handleGenerateSBOM)
 	s.AddTool(toolRunGate(), handleRunGate)
-	s.AddTool(toolAnalyzeFinding(), handleAnalyzeFinding)
 	s.AddTool(toolGenerateReport(), handleGenerateReport)
 
 	return s
@@ -148,14 +146,6 @@ func toolRunGate() mcp.Tool {
 		mcp.WithDescription("Evaluate a findings set against the quality gate policy. Returns pass/warn/fail decision plus all violations."),
 		mcp.WithString("engagement", mcp.Required(), mcp.Description("Engagement name — findings.json must exist in the engagement dir")),
 		mcp.WithString("policy", mcp.Description("Policy preset or path to a custom YAML file (default: moderate)")),
-	)
-}
-
-func toolAnalyzeFinding() mcp.Tool {
-	return mcp.NewTool("analyze_finding",
-		mcp.WithDescription("Send a single finding to the Claude API for AI-powered remediation analysis. Returns: technical explanation, reachability-aware fix recommendation, exact upgrade command, breaking change warning, and verification step. Requires ANTHROPIC_API_KEY env var — gracefully skipped if absent."),
-		mcp.WithString("engagement", mcp.Required(), mcp.Description("Engagement name (used for context)")),
-		mcp.WithString("finding_json", mcp.Required(), mcp.Description("JSON-serialised models.Finding object")),
 	)
 }
 
@@ -421,53 +411,6 @@ func handleRunGate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 			"summary":    result.Summary,
 			"violations": violations,
 		},
-	})
-}
-
-func handleAnalyzeFinding(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := req.GetArguments()
-	engagement, _ := args["engagement"].(string)
-	findingJSON, _ := args["finding_json"].(string)
-
-	if engagement == "" || findingJSON == "" {
-		return errRespond("engagement and finding_json are required")
-	}
-
-	var f models.Finding
-	if err := json.Unmarshal([]byte(findingJSON), &f); err != nil {
-		return errRespond(fmt.Sprintf("parse finding: %v", err))
-	}
-
-	if !claudeai.Available() {
-		return respond(toolResult{
-			Status:  "ok",
-			Summary: "AI analysis skipped — ANTHROPIC_API_KEY not set",
-			Data: map[string]interface{}{
-				"skipped":           true,
-				"reason":            "ANTHROPIC_API_KEY environment variable not configured",
-				"reachability_note": reachabilityNote(f.Reachability),
-				"finding": map[string]interface{}{
-					"id":           f.ID,
-					"rule_id":      f.RuleID,
-					"severity":     strings.ToUpper(string(f.Severity)),
-					"reachability": string(f.Reachability),
-					"package":      f.Package,
-					"fixed_version": f.FixedVersion,
-				},
-			},
-		})
-	}
-
-	analyzer := claudeai.New()
-	rem, err := analyzer.Analyze(ctx, engagement, &f)
-	if err != nil {
-		return errRespond(fmt.Sprintf("analyze finding: %v", err))
-	}
-
-	return respond(toolResult{
-		Status:  "ok",
-		Summary: fmt.Sprintf("[%s] %s — priority: %s", rem.Severity, rem.RuleID, rem.Priority),
-		Data:    rem,
 	})
 }
 

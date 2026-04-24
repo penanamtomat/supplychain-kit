@@ -18,9 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/penanamtomat/supplychain-kit/internal/claudeai"
 	"github.com/penanamtomat/supplychain-kit/internal/config"
-	"github.com/penanamtomat/supplychain-kit/internal/remediation"
 	"github.com/penanamtomat/supplychain-kit/internal/correlation"
 	"github.com/penanamtomat/supplychain-kit/internal/defectdojo"
 	"github.com/penanamtomat/supplychain-kit/internal/deptrack"
@@ -49,7 +47,6 @@ func main() {
 		Short:   "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
 		Version: version,
 	}
-	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), analyzeCmd(), reportCmd(), installHooksCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -1390,167 +1387,6 @@ Examples:
 	return cmd
 }
 
-// ── analyze command ───────────────────────────────────────────────────────────
-
-func analyzeCmd() *cobra.Command {
-	var (
-		findingsFile string
-		engagement   string
-		topN         int
-		outFile      string
-		useClaudeAI  bool
-	)
-	cmd := &cobra.Command{
-		Use:   "analyze",
-		Short: "Remediation analysis: template-based (default) or Claude API (--ai)",
-		Long: `Send findings to the Claude API for structured remediation guidance.
-
-For each finding, Claude produces:
-  - Technical explanation of root cause and attack vector
-  - Reachability-aware priority (fix-now | next-sprint | monitor)
-  - Exact upgrade command for the affected package
-  - Breaking change warning
-  - Verification step after the fix
-  - Advisory reference URL
-
-Priority is driven by reachability:
-  reachable / unknown   → fix-now
-  unreachable + critical → next-sprint
-  unreachable + ≤ high  → next-sprint
-  low / info            → monitor
-
-Requires ANTHROPIC_API_KEY environment variable.
-
-Examples:
-  supplychain-kit analyze --findings results/myapp/findings/findings.json --engagement myapp
-  supplychain-kit analyze --findings results/myapp/findings/findings.json --engagement myapp --top 5 --out remediation.json`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if useClaudeAI && !claudeai.Available() {
-				return fmt.Errorf("ANTHROPIC_API_KEY not set — export ANTHROPIC_API_KEY=<your-key>")
-			}
-
-			findings, err := readFindings(findingsFile)
-			if err != nil {
-				return err
-			}
-			if len(findings) == 0 {
-				fmt.Fprintln(os.Stderr, "  No findings to analyze.")
-				return nil
-			}
-
-			// Prioritise: reachable CRITICAL first, then reachable HIGH, then UNKNOWN order.
-			sortFindingsByPriority(findings)
-
-			var rems []*remediation.Remediation
-
-			if useClaudeAI {
-				// Use Claude API for analysis
-				analyzer := claudeai.New()
-				aiRems, errs := analyzer.AnalyzeBatch(cmd.Context(), engagement, findings, topN)
-
-				fmt.Fprintf(os.Stderr, "\n── AI Remediation Analysis (Claude) ─────\n")
-				fmt.Fprintf(os.Stderr, "  Findings analyzed: %d\n\n", len(aiRems))
-
-				for i, aiRem := range aiRems {
-					if errs[i] != nil {
-						fmt.Fprintf(os.Stderr, "  [warn] %s: %v\n", findings[i].RuleID, errs[i])
-						continue
-					}
-					rem := convertAIRemediation(aiRem)
-					rems = append(rems, rem)
-					printRemediation(aiRem)
-				}
-			} else {
-				// Use template-based analysis (default)
-				engine := remediation.New()
-				fmt.Fprintf(os.Stderr, "\n── Template-Based Remediation Analysis ────\n")
-				fmt.Fprintf(os.Stderr, "  Findings analyzed: %d\n\n", len(findings))
-
-				for i, f := range findings {
-					if topN > 0 && i >= topN {
-						break
-					}
-					rem := engine.Analyze(f)
-					if rem != nil {
-						rems = append(rems, rem)
-						printTemplateRemediation(rem)
-					}
-				}
-			}
-			fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
-
-			if outFile != "" {
-				raw, _ := json.MarshalIndent(rems, "", "  ")
-				if err := os.WriteFile(outFile, raw, 0o644); err != nil {
-					return fmt.Errorf("write output: %w", err)
-				}
-				fmt.Fprintf(os.Stderr, "  Remediation saved to %s\n", outFile)
-			}
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&findingsFile, "findings", "", "path to findings JSON file")
-	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement name (used for context in prompts)")
-	cmd.Flags().IntVar(&topN, "top", 10, "analyse top N findings by priority (0 = all)")
-		cmd.Flags().StringVar(&outFile, "out", "", "write remediation JSON to file")
-		cmd.Flags().BoolVar(&useClaudeAI, "ai", false, "use Claude AI API instead of template-based analysis")
-		_ = cmd.MarkFlagRequired("findings")
-		return cmd
-}
-
-func printRemediation(r *claudeai.Remediation) {
-	fmt.Fprintf(os.Stderr, "  [%s] %s\n", r.Severity, r.RuleID)
-	fmt.Fprintf(os.Stderr, "    Priority     : %s\n", r.Priority)
-	fmt.Fprintf(os.Stderr, "    Reachability : %s\n", r.Reachability)
-	fmt.Fprintf(os.Stderr, "    Explanation  : %s\n", r.Explanation)
-	if r.UpgradeCommand != "" {
-		fmt.Fprintf(os.Stderr, "    Fix          : %s\n", r.UpgradeCommand)
-	}
-	if r.BreakingChanges != "" && r.BreakingChanges != "none" {
-		fmt.Fprintf(os.Stderr, "    Breaking     : %s\n", r.BreakingChanges)
-	}
-	if r.VerifyStep != "" {
-		fmt.Fprintf(os.Stderr, "    Verify       : %s\n", r.VerifyStep)
-	}
-	fmt.Fprintln(os.Stderr)
-}
-
-func printTemplateRemediation(r *remediation.Remediation) {
-	fmt.Fprintf(os.Stderr, "  [%s] %s\n", r.Severity, r.RuleID)
-	fmt.Fprintf(os.Stderr, "    Priority     : %s\n", r.Priority)
-	fmt.Fprintf(os.Stderr, "    Reachability : %s\n", r.Reachability)
-	fmt.Fprintf(os.Stderr, "    Explanation  : %s\n", r.Explanation)
-	if r.UpgradeCommand != "" {
-		fmt.Fprintf(os.Stderr, "    Fix          : %s\n", r.UpgradeCommand)
-	}
-	if r.BreakingChanges != "" && r.BreakingChanges != "none" {
-		fmt.Fprintf(os.Stderr, "    Breaking     : %s\n", r.BreakingChanges)
-	}
-	if r.VerifyStep != "" {
-		fmt.Fprintf(os.Stderr, "    Verify       : %s\n", r.VerifyStep)
-	}
-	fmt.Fprintln(os.Stderr)
-}
-
-func convertAIRemediation(aiRem *claudeai.Remediation) *remediation.Remediation {
-	if aiRem == nil {
-		return nil
-	}
-	return &remediation.Remediation{
-		FindingID:       aiRem.FindingID,
-		RuleID:          aiRem.RuleID,
-		Severity:        aiRem.Severity,
-		Reachability:    aiRem.Reachability,
-		Priority:        aiRem.Priority,
-		Explanation:     aiRem.Explanation,
-		UpgradeCommand:  aiRem.UpgradeCommand,
-		BreakingChanges: aiRem.BreakingChanges,
-		VerifyStep:      aiRem.VerifyStep,
-		References:      aiRem.References,
-	}
-}
-
-// report command ────────────────────────────────────────────────────────────
 
 func reportCmd() *cobra.Command {
 	var (
@@ -1593,38 +1429,6 @@ Examples:
 				return fmt.Errorf("read findings: %w — run scan first", err)
 			}
 
-			// Optional AI remediation overlay.
-			remByID := map[string]*claudeai.Remediation{}
-			if remFile != "" {
-				raw, err := os.ReadFile(remFile)
-				if err != nil {
-					return fmt.Errorf("read remediation: %w", err)
-				}
-				var rems []*claudeai.Remediation
-				if err := json.Unmarshal(raw, &rems); err != nil {
-					return fmt.Errorf("parse remediation: %w", err)
-				}
-				for _, r := range rems {
-					if r != nil {
-						remByID[r.FindingID] = r
-					}
-				}
-			} else {
-				// Auto-load from default path if it exists.
-				defaultRem := filepath.Join("results", engagement, "remediation.json")
-				if raw, err := os.ReadFile(defaultRem); err == nil {
-					var rems []*claudeai.Remediation
-					if json.Unmarshal(raw, &rems) == nil {
-						for _, r := range rems {
-							if r != nil {
-								remByID[r.FindingID] = r
-							}
-						}
-					}
-				}
-			}
-
-			// Load finding template.
 			if tmplPath == "" {
 				tmplPath = filepath.Join("configs", "report-templates", "finding.md.tmpl")
 			}
@@ -1633,7 +1437,7 @@ Examples:
 			_ = os.MkdirAll(reportDir, 0o755)
 
 			mdPath := filepath.Join(reportDir, "report.md")
-			if err := renderMarkdownReport(mdPath, engagement, findings, remByID, tmplPath); err != nil {
+			if err := renderMarkdownReport(mdPath, engagement, findings, tmplPath); err != nil {
 				return fmt.Errorf("render markdown: %w", err)
 			}
 			fmt.Fprintf(os.Stderr, "  report.md → %s\n", mdPath)
@@ -1673,10 +1477,9 @@ type findingTemplateData struct {
 	Description     string
 	AdvisoryURL     string
 	ReachabilityNote string
-	AIRemediation   *claudeai.Remediation
 }
 
-func renderMarkdownReport(path, engagement string, findings []*models.Finding, remByID map[string]*claudeai.Remediation, tmplPath string) error {
+func renderMarkdownReport(path, engagement string, findings []*models.Finding, tmplPath string) error {
 	// Load and parse the per-finding template.
 	tmplSrc, err := os.ReadFile(tmplPath)
 	if err != nil {
@@ -1716,10 +1519,6 @@ func renderMarkdownReport(path, engagement string, findings []*models.Finding, r
 		fmt.Fprintf(f, "\n")
 	}
 
-	if len(remByID) > 0 {
-		fmt.Fprintf(f, "> AI remediation guidance (Claude) is included for %d findings.\n\n", len(remByID))
-	}
-
 	fmt.Fprintf(f, "## Findings\n\n")
 	if len(findings) == 0 {
 		fmt.Fprintf(f, "No vulnerabilities found.\n")
@@ -1748,7 +1547,6 @@ func renderMarkdownReport(path, engagement string, findings []*models.Finding, r
 			Description:      fn.Description,
 			AdvisoryURL:      fn.AdvisoryURL,
 			ReachabilityNote: reachabilityNote(fn.Reachability),
-			AIRemediation:    remByID[fn.ID],
 		}
 		if err := tmpl.Execute(f, data); err != nil {
 			fmt.Fprintf(f, "\n<!-- template error for finding %s: %v -->\n\n", fn.ID, err)

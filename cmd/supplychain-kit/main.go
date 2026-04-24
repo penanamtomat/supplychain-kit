@@ -28,6 +28,7 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/reachability"
 	pkgremediation "github.com/penanamtomat/supplychain-kit/internal/remediation/pkg"
 	"github.com/penanamtomat/supplychain-kit/internal/report"
+	"github.com/penanamtomat/supplychain-kit/internal/suppress"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/gitleaks"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/grype"
@@ -131,6 +132,7 @@ func scanCmd() *cobra.Command {
 		semgrepConfig string
 		gitHistory    bool
 		failOn        string
+		ignoreFile    string
 	)
 	cmd := &cobra.Command{
 		Use:   "scan",
@@ -222,6 +224,16 @@ Target:
 				scorer.Score(f, asset)
 			}
 
+			if ignoreFile == "" && isLocalPath(repo) {
+				ignoreFile = repo
+			}
+			if sup, err := suppress.Load(ignoreFile); err != nil {
+				fmt.Fprintf(os.Stderr, "warn: load suppressions: %v\n", err)
+			} else if n := sup.Apply(merged); n > 0 {
+				fmt.Fprintf(os.Stderr, "  Suppressed %d finding(s) via %s\n", n, ignoreFile)
+				merged = filterSuppressed(merged)
+			}
+
 			printSummary(merged)
 
 			// Target mode: write all reports to results/<target>/
@@ -263,7 +275,22 @@ Target:
 	cmd.Flags().StringVar(&semgrepConfig, "semgrep-config", "", "semgrep ruleset override (default: p/owasp-top-ten)")
 	cmd.Flags().BoolVar(&gitHistory, "git-history", false, "scan git commit history for secrets (gitleaks)")
 	cmd.Flags().StringVar(&failOn, "fail-on", "", "exit 1 if any finding is at or above this severity (critical|high|medium|low|info|none)")
+	cmd.Flags().StringVar(&ignoreFile, "ignore-file", "", "path to .supplychain-ignore (default: <repo>/.supplychain-ignore if --repo is local)")
 	return cmd
+}
+
+// filterSuppressed returns findings that have not been marked VEXNotAffected
+// by the suppression engine. The suppressed entries remain available via
+// their raw "suppressed_by" trail for audit.
+func filterSuppressed(in []*models.Finding) []*models.Finding {
+	out := in[:0]
+	for _, f := range in {
+		if f != nil && f.VEXStatus == models.VEXNotAffected {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // resolveTargetDir returns the absolute path to results/<target>.

@@ -1,0 +1,23 @@
+# supplychain-kit suppression file
+#
+# One rule per line. Use `#` for comments.
+#
+# Format:  <rule_id_glob>  [path:<glob>]  [package:<glob>]  [fingerprint:<value>]  [reason:<text>]
+#
+# Tokens after the rule ID combine with AND. Rules on different lines combine with OR.
+# Suppressed findings are marked VEX "not_affected" — they stay in findings.json
+# with a `suppressed_by` audit trail, but drop out of summaries and --fail-on.
+#
+# Examples:
+
+# Accept a specific CVE as a known false positive
+# CVE-2023-12345
+
+# Suppress a Semgrep rule only in legacy code
+# semgrep.tainted-sql  path:internal/legacy/*.go  reason:legacy module, scheduled for removal 2026-Q3
+
+# Drop all findings for an unmaintained dev-only dependency
+# *  package:dead-package  reason:unmaintained, only used in integration tests
+
+# Exact-fingerprint suppression (most precise — won't drift when the rule changes)
+# *  fingerprint:a1b2c3d4e5f6...

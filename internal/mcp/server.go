@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/penanamtomat/supplychain-kit/internal/claudeai"
 	"github.com/penanamtomat/supplychain-kit/internal/config"
 	"github.com/penanamtomat/supplychain-kit/internal/correlation"
 	"github.com/penanamtomat/supplychain-kit/internal/models"
@@ -415,7 +416,7 @@ func handleRunGate(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 	})
 }
 
-func handleAnalyzeFinding(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleAnalyzeFinding(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	engagement, _ := args["engagement"].(string)
 	findingJSON, _ := args["finding_json"].(string)
@@ -429,33 +430,36 @@ func handleAnalyzeFinding(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 		return errRespond(fmt.Sprintf("parse finding: %v", err))
 	}
 
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
+	if !claudeai.Available() {
 		return respond(toolResult{
 			Status:  "ok",
 			Summary: "AI analysis skipped — ANTHROPIC_API_KEY not set",
 			Data: map[string]interface{}{
-				"skipped": true,
-				"reason":  "ANTHROPIC_API_KEY environment variable not configured",
-				"finding": f,
+				"skipped":           true,
+				"reason":            "ANTHROPIC_API_KEY environment variable not configured",
+				"reachability_note": reachabilityNote(f.Reachability),
+				"finding": map[string]interface{}{
+					"id":           f.ID,
+					"rule_id":      f.RuleID,
+					"severity":     strings.ToUpper(string(f.Severity)),
+					"reachability": string(f.Reachability),
+					"package":      f.Package,
+					"fixed_version": f.FixedVersion,
+				},
 			},
 		})
 	}
 
-	// Delegate to the claudeai package (implemented in step 3).
-	// For now return a structured placeholder so the MCP server is usable immediately.
-	reachNote := reachabilityNote(f.Reachability)
+	analyzer := claudeai.New()
+	rem, err := analyzer.Analyze(ctx, engagement, &f)
+	if err != nil {
+		return errRespond(fmt.Sprintf("analyze finding: %v", err))
+	}
+
 	return respond(toolResult{
 		Status:  "ok",
-		Summary: fmt.Sprintf("Analysis queued for %s (reachability: %s)", f.RuleID, f.Reachability),
-		Data: map[string]interface{}{
-			"finding_id":        f.ID,
-			"rule_id":           f.RuleID,
-			"severity":          strings.ToUpper(string(f.Severity)),
-			"reachability":      string(f.Reachability),
-			"reachability_note": reachNote,
-			"ai_analysis":       "pending — implement internal/claudeai/remediation.go in step 3",
-		},
+		Summary: fmt.Sprintf("[%s] %s — priority: %s", rem.Severity, rem.RuleID, rem.Priority),
+		Data:    rem,
 	})
 }
 

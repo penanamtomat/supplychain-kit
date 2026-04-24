@@ -39,3 +39,5 @@ scan-results/
 reports/
 results/*
 !results/.gitkeep
+.claude/worktrees/
+.claude/settings.local.json

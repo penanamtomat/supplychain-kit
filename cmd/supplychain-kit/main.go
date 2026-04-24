@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/penanamtomat/supplychain-kit/internal/claudeai"
 	"github.com/penanamtomat/supplychain-kit/internal/config"
 	"github.com/penanamtomat/supplychain-kit/internal/correlation"
 	"github.com/penanamtomat/supplychain-kit/internal/defectdojo"
@@ -40,7 +41,7 @@ func main() {
 		Use:   "supplychain-kit",
 		Short: "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
 	}
-	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd())
+	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), analyzeCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -1315,4 +1316,148 @@ Examples:
 	cmd.Flags().StringVar(&outputDir, "out", "results", "base output directory")
 	_ = cmd.MarkFlagRequired("repo")
 	return cmd
+}
+
+// ── analyze command ───────────────────────────────────────────────────────────
+
+func analyzeCmd() *cobra.Command {
+	var (
+		findingsFile string
+		engagement   string
+		topN         int
+		outFile      string
+	)
+	cmd := &cobra.Command{
+		Use:   "analyze",
+		Short: "AI-powered remediation analysis via Claude API (requires ANTHROPIC_API_KEY)",
+		Long: `Send findings to the Claude API for structured remediation guidance.
+
+For each finding, Claude produces:
+  - Technical explanation of root cause and attack vector
+  - Reachability-aware priority (fix-now | next-sprint | monitor)
+  - Exact upgrade command for the affected package
+  - Breaking change warning
+  - Verification step after the fix
+  - Advisory reference URL
+
+Priority is driven by reachability:
+  reachable / unknown   → fix-now
+  unreachable + critical → next-sprint
+  unreachable + ≤ high  → next-sprint
+  low / info            → monitor
+
+Requires ANTHROPIC_API_KEY environment variable.
+
+Examples:
+  supplychain-kit analyze --findings results/myapp/findings/findings.json --engagement myapp
+  supplychain-kit analyze --findings results/myapp/findings/findings.json --engagement myapp --top 5 --out remediation.json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !claudeai.Available() {
+				return fmt.Errorf("ANTHROPIC_API_KEY not set — export ANTHROPIC_API_KEY=<your-key>")
+			}
+
+			findings, err := readFindings(findingsFile)
+			if err != nil {
+				return err
+			}
+			if len(findings) == 0 {
+				fmt.Fprintln(os.Stderr, "  No findings to analyze.")
+				return nil
+			}
+
+			// Prioritise: reachable CRITICAL first, then reachable HIGH, then UNKNOWN order.
+			sortFindingsByPriority(findings)
+
+			analyzer := claudeai.New()
+			rems, errs := analyzer.AnalyzeBatch(cmd.Context(), engagement, findings, topN)
+
+			fmt.Fprintf(os.Stderr, "\n── AI Remediation Analysis ──────────────\n")
+			fmt.Fprintf(os.Stderr, "  Findings analyzed: %d\n\n", len(rems))
+
+			var successRems []*claudeai.Remediation
+			for i, rem := range rems {
+				if errs[i] != nil {
+					fmt.Fprintf(os.Stderr, "  [warn] %s: %v\n", findings[i].RuleID, errs[i])
+					continue
+				}
+				successRems = append(successRems, rem)
+				printRemediation(rem)
+			}
+			fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
+
+			if outFile != "" {
+				raw, _ := json.MarshalIndent(successRems, "", "  ")
+				if err := os.WriteFile(outFile, raw, 0o644); err != nil {
+					return fmt.Errorf("write output: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "  Remediation saved to %s\n", outFile)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&findingsFile, "findings", "", "path to findings JSON file")
+	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement name (used for context in prompts)")
+	cmd.Flags().IntVar(&topN, "top", 10, "analyse top N findings by priority (0 = all)")
+	cmd.Flags().StringVar(&outFile, "out", "", "write remediation JSON to file")
+	_ = cmd.MarkFlagRequired("findings")
+	return cmd
+}
+
+func printRemediation(r *claudeai.Remediation) {
+	fmt.Fprintf(os.Stderr, "  [%s] %s\n", r.Severity, r.RuleID)
+	fmt.Fprintf(os.Stderr, "    Priority     : %s\n", r.Priority)
+	fmt.Fprintf(os.Stderr, "    Reachability : %s\n", r.Reachability)
+	fmt.Fprintf(os.Stderr, "    Explanation  : %s\n", r.Explanation)
+	if r.UpgradeCommand != "" {
+		fmt.Fprintf(os.Stderr, "    Fix          : %s\n", r.UpgradeCommand)
+	}
+	if r.BreakingChanges != "" && r.BreakingChanges != "none" {
+		fmt.Fprintf(os.Stderr, "    Breaking     : %s\n", r.BreakingChanges)
+	}
+	if r.VerifyStep != "" {
+		fmt.Fprintf(os.Stderr, "    Verify       : %s\n", r.VerifyStep)
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
+// sortFindingsByPriority sorts findings: reachable CRITICAL first, reachable HIGH,
+// unknown CRITICAL, then remaining by severity desc.
+func sortFindingsByPriority(findings []*models.Finding) {
+	reachPriority := func(r models.Reachability) int {
+		switch r {
+		case models.ReachReachable, models.ReachConfirmed:
+			return 0
+		case models.ReachUnknown:
+			return 1
+		default:
+			return 2
+		}
+	}
+	sevPriority := func(s models.Severity) int {
+		switch s {
+		case models.SeverityCritical:
+			return 0
+		case models.SeverityHigh:
+			return 1
+		case models.SeverityMedium:
+			return 2
+		case models.SeverityLow:
+			return 3
+		default:
+			return 4
+		}
+	}
+	// Simple insertion sort — finding sets are typically small (<200).
+	for i := 1; i < len(findings); i++ {
+		for j := i; j > 0; j-- {
+			a, b := findings[j-1], findings[j]
+			ra, rb := reachPriority(a.Reachability), reachPriority(b.Reachability)
+			sa, sb := sevPriority(a.Severity), sevPriority(b.Severity)
+			if ra > rb || (ra == rb && sa > sb) {
+				findings[j-1], findings[j] = findings[j], findings[j-1]
+			} else {
+				break
+			}
+		}
+	}
 }

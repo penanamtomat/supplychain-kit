@@ -27,6 +27,7 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/quality"
 	"github.com/penanamtomat/supplychain-kit/internal/reachability"
 	pkgremediation "github.com/penanamtomat/supplychain-kit/internal/remediation/pkg"
+	"github.com/penanamtomat/supplychain-kit/internal/report"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/gitleaks"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/grype"
@@ -53,7 +54,69 @@ func main() {
 	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), reportCmd(), installHooksCmd())
 	root.AddCommand(remediateCmd(), licenseCmd(), graphCmd())
 	if err := root.Execute(); err != nil {
-		os.Exit(1)
+		if fe, ok := err.(failOnError); ok {
+			os.Exit(fe.code)
+		}
+		os.Exit(2)
+	}
+}
+
+// failOnError signals "scan completed successfully but findings exceeded the
+// --fail-on threshold." Exit code 1 is reserved for this path so CI can
+// distinguish policy failures (1) from tool/configuration errors (2).
+type failOnError struct {
+	code    int
+	message string
+}
+
+func (e failOnError) Error() string { return e.message }
+
+// severityRank returns a numeric rank where higher = more severe. Used to
+// evaluate --fail-on thresholds ("fail if any finding has severity >= X").
+func severityRank(s models.Severity) int {
+	switch s {
+	case models.SeverityCritical:
+		return 4
+	case models.SeverityHigh:
+		return 3
+	case models.SeverityMedium:
+		return 2
+	case models.SeverityLow:
+		return 1
+	case models.SeverityInfo:
+		return 0
+	}
+	return -1
+}
+
+// evaluateFailOn returns a failOnError if any finding meets or exceeds the
+// threshold. Threshold values: "", "none" (never fail), "critical", "high",
+// "medium", "low", "info" (any finding).
+func evaluateFailOn(threshold string, findings []*models.Finding) error {
+	threshold = strings.ToLower(strings.TrimSpace(threshold))
+	if threshold == "" || threshold == "none" {
+		return nil
+	}
+	limit := severityRank(models.Severity(threshold))
+	if limit < 0 {
+		return fmt.Errorf("invalid --fail-on %q: use critical|high|medium|low|info|none", threshold)
+	}
+	count := 0
+	var maxSev models.Severity
+	for _, f := range findings {
+		if severityRank(f.Severity) >= limit {
+			count++
+			if severityRank(f.Severity) > severityRank(maxSev) {
+				maxSev = f.Severity
+			}
+		}
+	}
+	if count == 0 {
+		return nil
+	}
+	return failOnError{
+		code:    1,
+		message: fmt.Sprintf("fail-on threshold exceeded: %d finding(s) at %s or higher (max %s)", count, threshold, maxSev),
 	}
 }
 
@@ -67,6 +130,7 @@ func scanCmd() *cobra.Command {
 		target        string
 		semgrepConfig string
 		gitHistory    bool
+		failOn        string
 	)
 	cmd := &cobra.Command{
 		Use:   "scan",
@@ -171,19 +235,25 @@ Target:
 				}
 				writeTargetReports(targetDir, merged, repo, mode)
 				fmt.Fprintf(os.Stderr, "  Reports saved to %s/\n\n", targetDir)
-				return nil
+				return evaluateFailOn(failOn, merged)
 			}
 
 			if format == "table" {
-				return printTable(merged)
+				if err := printTable(merged); err != nil {
+					return err
+				}
+				return evaluateFailOn(failOn, merged)
 			}
 			// Default: JSON output when --out is set or --format json.
 			if out != "" || format == "json" {
-				return writeFindings(out, merged)
+				if err := writeFindings(out, merged); err != nil {
+					return err
+				}
 			}
-			return nil
+			return evaluateFailOn(failOn, merged)
 		},
 	}
+	cmd.SilenceUsage = true
 	cmd.Flags().StringVar(&repo, "repo", "", "local path or git repository URL")
 	cmd.Flags().StringVar(&ref, "ref", "HEAD", "git ref (branch, tag, commit)")
 	cmd.Flags().StringVar(&out, "out", "", "write JSON findings to file (- for stdout)")
@@ -192,6 +262,7 @@ Target:
 	cmd.Flags().StringVar(&target, "target", "", "target name — saves reports to results/<target>/")
 	cmd.Flags().StringVar(&semgrepConfig, "semgrep-config", "", "semgrep ruleset override (default: p/owasp-top-ten)")
 	cmd.Flags().BoolVar(&gitHistory, "git-history", false, "scan git commit history for secrets (gitleaks)")
+	cmd.Flags().StringVar(&failOn, "fail-on", "", "exit 1 if any finding is at or above this severity (critical|high|medium|low|info|none)")
 	return cmd
 }
 
@@ -216,6 +287,7 @@ func resolveTargetDir(target string) (string, error) {
 // into the target directory.
 func writeTargetReports(dir string, findings []*models.Finding, repo, mode string) {
 	_ = writeFindings(filepath.Join(dir, "findings.json"), findings)
+	_ = report.WriteSARIF(filepath.Join(dir, "findings.sarif"), version, findings)
 
 	f, err := os.Create(filepath.Join(dir, "findings.txt"))
 	if err == nil {

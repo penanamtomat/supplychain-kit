@@ -192,33 +192,205 @@ Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pad
 
 ---
 
-## v0.8 — Claude Code Integration
+## v0.8 — Claude Code Integration (Agentic Supply Chain Security)
 
-**Tujuan:** `supplychain-kit` bisa digunakan sebagai tool di dalam Claude Code via MCP dan slash commands, sekaligus mendukung agentic SAST.
+**Tujuan:** `supplychain-kit` berjalan sepenuhnya sebagai agentic tool di dalam Claude Code — user cukup berikan engagement name dan path repo, Claude otomatis menjalankan seluruh pipeline scan, analisis, dan laporan. Cocok untuk semua persona: developer, security engineer, AI/ML engineer — baik yang sedang membangun product maupun yang sudah ship ke production.
 
-### MCP Server Mode
+**Referensi desain:** Terinspirasi dari pentest-kit (BlackHat-level tool) dengan adaptasi ke domain supply chain: bukan active attack, tapi contextual risk analysis — "CVE ini di mana, seberapa bahaya untuk kode KAMU, dan bagaimana fix-nya."
+
+**Target publikasi:** BlackHat Europe (proposal level)
+
+---
+
+### 1. MCP Server (Prioritas Utama — Entry Point Otomasi)
+
+MCP adalah backbone utama v0.8. Semua otomasi Claude Code mengalir melalui ini.
 
 - [ ] `supplychain-kit mcp` — jalankan sebagai MCP server (stdio transport)
-- [ ] Expose tools: `scan_repository`, `generate_sbom`, `run_gate`, `check_reachability`
-- [ ] Setiap tool menerima parameter dan mengembalikan structured JSON result
-- [ ] Panduan registrasi di `~/.claude/mcp.json` atau project `.claude/mcp.json`
+- [ ] Tool `init_engagement` — buat engagement baru: nama, repo path, policy, output dir
+- [ ] Tool `scan_repository` — jalankan full pipeline scan (SCA + SAST + reachability), return structured findings
+- [ ] Tool `generate_sbom` — hasilkan SBOM dari repo (Syft), return path + summary
+- [ ] Tool `run_gate` — evaluasi findings terhadap policy, return pass/warn/fail + violations
+- [ ] Tool `analyze_finding` — kirim satu finding ke Claude API, terima AI explanation + remediation suggestion
+- [ ] Tool `generate_report` — render findings ke Markdown report, simpan ke engagement dir
+- [ ] Setiap tool return structured JSON: `{status, data, summary, errors}`
+- [ ] Registrasi otomatis: generate `~/.claude/mcp.json` snippet via `supplychain-kit mcp --print-config`
 
-### Agentic SAST via Claude Skill
+---
 
-- [ ] Buat Claude Code skill: `/security-scan` — trigger `supplychain-kit scan` dari dalam Claude Code
-- [ ] Skill menerima path repo, mode (`sca`/`sast`/`all`), dan format output
-- [ ] Hasil scan ditampilkan sebagai formatted report di Claude Code chat
-- [ ] Integrasi dengan GitHub tools: bisa scan PR diff, bukan hanya full repo
+### 2. Two-Tier Agent Architecture
 
-### Claude Code Hooks Integration
+Mengikuti pola Orchestrator + Executor dari pentest-kit, diadaptasi ke supply chain workflow.
 
-- [ ] Template pre-commit hook yang memanggil `supplychain-kit gate`
-- [ ] Template post-scan hook yang bisa trigger upload ke Dependency-Track
+- [ ] `.claude/agents/orchestrator.md` — Orchestrator agent: koordinasi full engagement workflow
+  - Terima: engagement name, repo path, optional policy + mode
+  - Jalankan fase secara berurutan via MCP tools: Init → SBOM → Scan → Gate → Analyze → Report
+  - Monitor progress, handle error gracefully, ringkaskan hasil ke user
+  - **Tidak pernah** jalankan binary langsung — semua via MCP tools
+- [ ] `.claude/agents/executor.md` — Executor agent: spesialis per domain
+  - SCA Executor: orchestrate syft → grype → trivy → osv-scanner
+  - SAST Executor: orchestrate semgrep + gitleaks + joern
+  - Analysis Executor: kirim findings ke Claude API untuk AI remediation
+
+---
+
+### 3. Custom Claude Code Skill `/security-scan`
+
+Slash command yang mengaktifkan full agentic workflow dari Claude Code chat.
+
+- [ ] `.claude/skills/security-scan/SKILL.md` — entry point skill
+  - Prompt user untuk: engagement name, repo path, scan mode (`sca`/`sast`/`all`/`full`)
+  - Optional: policy preset (`strict`/`moderate`/`permissive`), output format
+  - Panggil Orchestrator agent, tampilkan progress live ke user
+  - Tampilkan summary report di akhir: total findings, top CVEs, gate result, path ke report
+- [ ] Onboarding flow mirip pentest-kit:
+  1. User: `/security-scan`
+  2. Skill tanya: engagement name? repo path? policy?
+  3. Claude jalankan full pipeline otomatis
+  4. User menunggu — Claude kirim progress update tiap fase
+  5. Hasil: formatted report + gate verdict + top-N AI remediation suggestions
+
+---
+
+### 4. Knowledge Base (Dynamic — `.claude/skills/security-scan/knowledge/`)
+
+Knowledge base dinamis yang meningkat seiring perkembangan ancaman. Mencakup semua persona (developer, security engineer, AI/ML engineer).
+
+- [ ] `supply-chain-attacks.md` — pola serangan supply chain: dependency confusion, typosquatting, malicious package injection, protestware
+- [ ] `cve-severity-guide.md` — cara baca CVSS, kapan CVE kritis vs dapat ditoleransi, konteks reachability
+- [ ] `remediation-by-ecosystem.md` — playbook fix per ekosistem: npm (`npm audit fix`), pip (`pip-audit`), Go (`go get -u`), Maven, Cargo
+- [ ] `sbom-formats.md` — CycloneDX vs SPDX, kapan pakai mana, compliance context (NTIA, EO 14028)
+- [ ] `ci-integration-patterns.md` — cara pasang gate di GitHub Actions, GitLab CI, Jenkins, ArgoCD
+- [ ] `ai-ml-supply-chain.md` — risiko khusus AI/ML engineer: model poisoning via HuggingFace, malicious PyPI packages untuk ML tooling, dependency chain di training pipeline
+- [ ] `risk-scoring-explained.md` — penjelasan risk score supplychain-kit: CVSS × reachability × fix availability
+
+---
+
+### 5. `supplychain-kit init` Command
+
+Command baru untuk bootstrap engagement (mirip `pentest-kit init`).
+
+- [ ] `supplychain-kit init <engagement> --repo <path> [--policy <preset>] [--out <dir>]`
+- [ ] Buat struktur direktori: `results/<engagement>/findings.json`, `reports/`, `sbom/`, `state.json`
+- [ ] `state.json`: track fase yang sudah selesai (Init → SBOM → SCA → SAST → Gate → Report)
+- [ ] `supplychain-kit status <engagement>` — tampilkan progress engagement
+
+---
+
+### 6. AI-Powered Remediation via Claude API
+
+- [ ] `internal/claudeai/remediation.go` — kirim finding ke Claude API, terima structured remediation
+- [ ] `supplychain-kit analyze --findings findings.json [--top 10]` — AI analysis top-N findings
+- [ ] Output per finding: technical explanation + reachability-aware fix recommendation + upgrade command + breaking change warning + verify step
+- [ ] Support `ANTHROPIC_API_KEY` via env var atau `configs/aspm.yaml`
+- [ ] Graceful degradation: jika API key tidak ada, skip AI analysis tanpa error fatal
+- [ ] Remediation priority dipengaruhi reachability:
+  - `reachable: YES` → "Fix segera. Prioritas 1."
+  - `reachable: NO` → "Fix di sprint berikutnya."
+  - `reachable: UNKNOWN` → "Treat as reachable sampai terbukti sebaliknya."
+
+---
+
+### 7. Report Generation (Markdown + DOCX)
+
+**Prinsip report:** Bahasa teknis penuh, remediation harus clear + actionable + lengkap. Target audience adalah engineer yang sudah paham CVE — bukan simplified, tapi informatif dan tidak ada yang perlu diasumsikan sendiri.
+
+- [ ] `supplychain-kit report --engagement <name> --format markdown` — render per-finding Markdown
+- [ ] `supplychain-kit report --engagement <name> --format docx` — generate DOCX via Pandoc
+- [ ] `supplychain-kit report --engagement <name> --format all` — generate keduanya sekaligus
+- [ ] Template Markdown per finding (`configs/report-templates/finding.md.tmpl`):
+  ```
+  ## [SEVERITY] CVE-XXXX-XXXXX — <package> <version>
+
+  Affected:     <package> <version>
+  Introduced:   <dependency chain>
+  CWE:          CWE-XXXX (<name>)
+  Reachable:    YES | NO | UNKNOWN — <call path jika reachable>
+  Exploit:      Public PoC available | No known exploit
+
+  REMEDIATION:
+    Fix:        Upgrade <package> to ≥<fixed-version>
+    Command:    <exact package manager command>
+    Breaking:   <none | describe breaking changes>
+    Verify:     <command untuk verifikasi setelah fix>
+
+  REFERENCES:
+    Advisory:   <URL>
+    NVD:        <URL>
+  ```
+- [ ] Template DOCX: cover page, executive summary (total findings per severity, gate verdict), findings table, per-finding detail, appendix SBOM
+- [ ] Pandoc sebagai renderer DOCX — tidak perlu library tambahan, sudah tersedia di mayoritas Linux/macOS
+- [ ] `supplychain-kit report --check-deps` — verifikasi Pandoc terinstall
+
+---
+
+### 8. Claude Code Hooks Templates
+
+- [ ] `configs/hooks/pre-commit.sh` — jalankan `supplychain-kit gate` sebelum commit, block jika Critical
+- [ ] `configs/hooks/post-scan.sh` — setelah scan, upload ke Dependency-Track (opsional)
+- [ ] `configs/hooks/claude-stop.sh` — hook untuk Claude Code `Stop` event: tampilkan summary engagement aktif
+- [ ] Instruksi setup di README: cara register hook ke `.claude/settings.json`
+
+---
+
+### 9. Test
+
+- [ ] Test MCP server: jalankan `supplychain-kit mcp` sebagai subprocess, kirim JSON-RPC request, validasi response
+- [ ] Test `init` command: verifikasi struktur direktori dan `state.json` dibuat dengan benar
+- [ ] Test `analyze` command: mock Claude API, verifikasi remediation di-parse dan di-output dengan benar
+- [ ] Test `report` command: verifikasi Markdown + DOCX di-generate dari fixture findings
+- [ ] Integration test skill + MCP: simulasikan full workflow dari skill invocation sampai report
+
+---
+
+## v0.9 — Taint Analysis Engine (Dependency-Aware SAST)
+
+**Tujuan:** supplychain-kit mampu membuktikan apakah sebuah CVE di dependency benar-benar exploitable melalui kode user — bukan hanya "package ini vulnerable", tapi "user input dari endpoint ini bisa trigger CVE ini". Ini adalah fitur yang **tidak ada di tools open source manapun** saat ini.
+
+**Konteks kompetitif:**
+- Semgrep Supply Chain, Endor Labs, Snyk — semua berbayar/SaaS untuk fitur ini
+- CodeQL bisa melakukan ini tapi butuh GitHub Advanced Security dan setup complex
+- supplychain-kit akan menjadi satu-satunya standalone open-source CLI dengan kemampuan ini
+
+**Fondasi yang sudah ada:** Joern CPG (Call Property Graph) sudah diimplementasikan di v0.6. Taint engine dibangun di atas infrastruktur yang sama.
+
+### Taint Analysis Engine
+
+- [ ] `internal/taint/source_detector.go` — deteksi user-controlled input entry points:
+  - HTTP handler parameters (gin, echo, net/http, fasthttp, flask, express, spring, dll)
+  - Environment variables yang di-read ke variabel
+  - File read operations dengan path dari user
+  - CLI argument parsing
+- [ ] `internal/taint/propagator.go` — trace taint melalui call graph Joern:
+  - Forward propagation: dari source → melalui function calls → ke sink
+  - Sanitizer detection: input yang sudah di-validate/escape dianggap clean
+  - Inter-procedural: trace melewati function boundaries
+- [ ] `internal/taint/sink_matcher.go` — cocokkan tainted call dengan CVE sink symbols:
+  - Ambil affected function symbols dari metadata Grype/Trivy
+  - Match dengan node di CPG yang tainted
+  - Output: confirmed exploitable path dengan source → propagation chain → sink
+- [ ] Integrasi ke `scan` command: findings dengan confirmed taint path mendapat label `exploitable: CONFIRMED`
+- [ ] Output di report:
+  ```
+  Reachable:    CONFIRMED EXPLOITABLE
+  Taint path:   POST /api/data → handler.go:47 (user_input)
+                → utils/fetch.go:23 (url = user_input)
+                → requests.get(url)  ← CVE-2024-XXXX sink
+  ```
+
+### Multi-Language Support (bertahap)
+
+- [ ] Go — via Joern Go frontend (sudah tersedia)
+- [ ] Python — via Joern Python frontend
+- [ ] JavaScript/TypeScript — via Joern JS frontend
+- [ ] Java — via Joern Java frontend
 
 ### Test
 
-- [ ] Test MCP server dengan MCP test client
-- [ ] Test skill dengan sample repository
+- [ ] Unit test source_detector: fixture HTTP handlers berbagai framework → detect sources correctly
+- [ ] Unit test propagator: fixture call graph dengan taint chain → propagasi benar
+- [ ] Unit test sink_matcher: fixture CVE sink symbols → match dengan CPG nodes
+- [ ] E2E test: repo dengan known vulnerable pattern → output `exploitable: CONFIRMED` dengan path yang benar
 
 ---
 
@@ -247,7 +419,7 @@ Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pad
 
 **Urutan prioritas engine:**
 ```
-SCA (syft→grype) → SAST (semgrep+gitleaks) → Gate → Reachability → Dep Tracking → Claude Code MCP
+SCA (syft→grype→trivy→osv) → SAST (semgrep+gitleaks+joern) → Gate → Reachability → Dep Tracking → Claude Code MCP → AI Remediation
 ```
 
 **Mode operasi yang didukung:**
@@ -256,6 +428,33 @@ SCA (syft→grype) → SAST (semgrep+gitleaks) → Gate → Reachability → Dep
 |------|-----------|-------------|
 | Standalone | Binary CLI saja | Developer lokal, CI sederhana |
 | With tracking | CLI + Dependency-Track/DefectDojo (opsional) | Tim, tracking vulnerability |
-| Claude Code | CLI + MCP (v0.8+) | Agentic workflow, AI-assisted security review |
+| Claude Code (Agentic) | CLI + MCP + Claude Code (v0.8+) | Full otomasi: init → scan → analyze → report tanpa intervensi manual |
+
+**Target user (v0.8+):**
+
+Semua persona engineer yang membangun atau sudah memiliki product software. Target user adalah engineer yang **sudah paham CVE dan security** — tools ini tidak menyederhanakan, tapi memperkuat kemampuan analisis mereka:
+- **Developer** — prevention di awal development, pre-commit gate, tahu CVE mana yang benar-benar perlu di-fix sekarang
+- **Security Engineer** — audit menyeluruh, policy enforcement, tracking CVE, reachability-aware triage
+- **AI/ML Engineer** — risiko supply chain khusus ML: PyPI poisoning, model dependency chain, training pipeline attack surface
+
+**Filosofi report:**
+- Bahasa teknis penuh — tidak ada simplifikasi yang tidak perlu
+- Remediation harus **clear, complete, dan actionable**: exact command, breaking changes, verify step
+- Reachability mengubah prioritas remediation: `REACHABLE` → fix sekarang, `UNREACHABLE` → fix next sprint, `UNKNOWN` → treat as reachable
+- Format dual: **Markdown** untuk terminal/GitHub/CI, **DOCX** via Pandoc untuk stakeholder/meeting
+
+**Desain agentic workflow (v0.8):**
+```
+User: /security-scan
+  → Skill tanya: engagement name, repo path, policy
+  → Orchestrator agent jalankan via MCP:
+      1. init_engagement  → buat struktur hasil
+      2. generate_sbom    → SBOM dari repo
+      3. scan_repository  → SCA + SAST + reachability
+      4. run_gate         → evaluasi policy
+      5. analyze_finding  → AI remediation top-N CVE
+      6. generate_report  → Markdown report
+  → User terima: summary + gate verdict + report path
+```
 
 _Pick any unchecked item, open an issue, and submit a PR to `dev`._

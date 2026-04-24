@@ -2,31 +2,39 @@
 # install.sh — supplychain-kit one-shot installer
 #
 # Supported platforms:
-#   Linux   (amd64, arm64) — via official install scripts + pip
-#   macOS   (amd64, arm64) — via Homebrew (preferred) or official scripts
-#   Windows (amd64)        — via Git Bash / MSYS2 / WSL
+#   Linux  (amd64, arm64) — via official install scripts + pip
+#   macOS  (amd64, arm64) — via Homebrew (preferred) or official scripts
+#
+# Windows is NOT supported natively. semgrep, joern, and several scanner
+# tools do not run on Windows. Use WSL2:
+#   wsl --install && wsl bash install.sh
 #
 # What this script does:
 #   1. Verify prerequisites  (Go, git, curl)
 #   2. Install scanner tools (syft, grype, trivy, osv-scanner, gitleaks, semgrep, joern)
 #   3. Install pandoc        (optional, required for --format docx report generation)
-#   4. Build supplychain-kit binary from source
+#   4. Build supplychain-kit binary from source (version-stamped via git describe)
 #   5. Install supplychain-kit into a directory on PATH
-#   6. Print PATH setup instructions when needed
+#   6. Install Claude Code skill to ~/.claude/skills/supplychain-kit
+#   7. Run go test ./... as verification
 #
 # Usage:
-#   bash install.sh                        # full install (always fetches latest versions)
+#   bash install.sh                        # full install
+#   bash install.sh --symlink              # symlink skill dir (live edits for dev)
 #   bash install.sh --no-semgrep           # skip semgrep (no Python)
 #   bash install.sh --no-trivy             # skip trivy
 #   bash install.sh --no-osv               # skip osv-scanner
 #   bash install.sh --no-joern             # skip joern (large download, Java required)
-#   bash install.sh --prefix /usr/local    # custom install prefix
+#   bash install.sh --no-pandoc            # skip pandoc
+#   bash install.sh --skip-test            # skip go test verification
+#   bash install.sh --prefix /usr/local    # custom binary install prefix
 #   bash install.sh --help
 #
-# All scanner tools are installed at their LATEST release automatically.
-# Override a specific version via environment variables if needed:
-#   GITLEAKS_VERSION=8.21.2 bash install.sh
-#   TRIVY_VERSION=0.70.0 bash install.sh
+# Environment variables:
+#   CLAUDE_HOME=~/.claude          Override Claude Code home (default: auto-detect)
+#   CLAUDE_HOME=~/.claude,~/.claude-work  Install skill to multiple homes
+#   GITLEAKS_VERSION=8.21.2        Pin specific tool versions
+#   TRIVY_VERSION=0.70.0
 
 set -euo pipefail
 
@@ -50,6 +58,8 @@ SKIP_TRIVY=false
 SKIP_OSV=false
 SKIP_JOERN=false
 SKIP_PANDOC=false
+SKIP_TEST=false
+USE_SYMLINK=false
 INSTALL_DIR="${INSTALL_DIR:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -60,6 +70,8 @@ while [[ $# -gt 0 ]]; do
     --no-osv)       SKIP_OSV=true ;;
     --no-joern)     SKIP_JOERN=true ;;
     --no-pandoc)    SKIP_PANDOC=true ;;
+    --skip-test)    SKIP_TEST=true ;;
+    --symlink)      USE_SYMLINK=true ;;
     --prefix)       INSTALL_DIR="$1"; shift ;;
     --prefix=*)     INSTALL_DIR="${arg#--prefix=}" ;;
     --help|-h)
@@ -67,42 +79,57 @@ while [[ $# -gt 0 ]]; do
 Usage: bash install.sh [OPTIONS]
 
 Options:
+  --symlink           Symlink skill dir to repo (live edits — for supplychain-kit developers)
   --no-semgrep        Skip semgrep installation (requires Python/pip)
   --no-trivy          Skip trivy installation
   --no-osv            Skip osv-scanner installation
   --no-joern          Skip joern installation (large ~500MB download, requires Java)
   --no-pandoc         Skip pandoc installation (only needed for --format docx reports)
-  --prefix <dir>      Install supplychain-kit and scanner tools to <dir>
-                      (default: ~/.local/bin on Linux/Windows,
-                                /usr/local/bin on macOS if writable)
+  --skip-test         Skip go test verification at the end
+  --prefix <dir>      Install supplychain-kit binary to <dir>
+                      (default: ~/.local/bin on Linux, /usr/local/bin on macOS if writable)
   --help              Show this help
 
 Environment variables:
   INSTALL_DIR         Same as --prefix
+  CLAUDE_HOME         Claude Code home dir(s), comma-separated (default: auto-detect)
   GITLEAKS_VERSION    Pin gitleaks version  (default: latest)
   TRIVY_VERSION       Pin trivy version     (default: latest)
   OSV_VERSION         Pin osv-scanner version (default: latest)
   SEMGREP_VERSION     Pin semgrep version   (default: latest)
 
-By default all tools are fetched at their latest release.
+Windows users: this tool requires Linux or macOS. On Windows, use WSL2:
+  wsl --install
+  wsl bash install.sh
 EOF
       exit 0
       ;;
+    *)
+      error "Unknown option: $arg"
+      echo "Run 'bash install.sh --help' for usage."
+      exit 1
+      ;;
   esac
 done
-
 
 # ── OS / arch detection ───────────────────────────────────────────────────────
 _uname_s="$(uname -s)"
 _uname_m="$(uname -m)"
 
 case "$_uname_s" in
-  Darwin)                OS="darwin"  ;;
-  Linux)                 OS="linux"   ;;
-  MINGW*|MSYS*|CYGWIN*)  OS="windows" ;;
+  Darwin) OS="darwin" ;;
+  Linux)  OS="linux"  ;;
+  MINGW*|MSYS*|CYGWIN*)
+    error "Windows is not supported natively."
+    error "semgrep, joern, and several scanner tools do not run on Windows."
+    error ""
+    error "Use WSL2 instead:"
+    error "  1. wsl --install          (in PowerShell as Administrator)"
+    error "  2. wsl bash install.sh    (from this directory inside WSL)"
+    exit 1
+    ;;
   *)
     error "Unsupported OS: $_uname_s"
-    error "Supported: Linux, macOS (Darwin), Windows (Git Bash / MSYS2)"
     exit 1
     ;;
 esac
@@ -112,14 +139,9 @@ case "$_uname_m" in
   arm64|aarch64) ARCH="arm64" ;;
   *)
     error "Unsupported architecture: $_uname_m"
-    error "Supported: x86_64 (amd64), arm64 (aarch64)"
     exit 1
     ;;
 esac
-
-EXT=""
-ARCHIVE_EXT="tar.gz"
-[ "$OS" = "windows" ] && { EXT=".exe"; ARCHIVE_EXT="zip"; }
 
 if [ -z "$INSTALL_DIR" ]; then
   if [ "$OS" = "darwin" ] && [ -w "/usr/local/bin" ]; then
@@ -139,9 +161,7 @@ detect_shell_profile() {
   case "$sh" in
     zsh)  echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
     fish) echo "$HOME/.config/fish/config.fish" ;;
-    *)
-      [ "$OS" = "darwin" ] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc"
-      ;;
+    *)    [ "$OS" = "darwin" ] && echo "$HOME/.bash_profile" || echo "$HOME/.bashrc" ;;
   esac
 }
 SHELL_PROFILE="$(detect_shell_profile)"
@@ -151,13 +171,8 @@ ensure_install_dir() {
   mkdir -p "$INSTALL_DIR"
   if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     warn "$INSTALL_DIR is not on your PATH."
-    if [ "$OS" = "windows" ]; then
-      warn "Add it permanently via Windows Settings → System → Environment Variables,"
-      warn "or add this line to $SHELL_PROFILE for Git Bash:"
-      warn "  export PATH=\"\$PATH:$INSTALL_DIR\""
-    elif [ "$(basename "${SHELL:-bash}")" = "fish" ]; then
-      warn "Add it to Fish:"
-      warn "  fish_add_path $INSTALL_DIR"
+    if [ "$(basename "${SHELL:-bash}")" = "fish" ]; then
+      warn "Add it to Fish:  fish_add_path $INSTALL_DIR"
     else
       warn "Add this line to $SHELL_PROFILE:"
       warn "  export PATH=\"\$PATH:$INSTALL_DIR\""
@@ -172,9 +187,6 @@ copy_bin() {
   chmod 0755 "$dst"
 }
 
-# Fetch latest release tag from GitHub API.
-# Usage: latest_release <owner/repo>
-# Respects env override: variable name derived from repo name.
 latest_release() {
   local repo="$1"
   local tag
@@ -188,7 +200,6 @@ latest_release() {
   echo "$tag"
 }
 
-# Download a release archive (zip or tar.gz) and extract a named binary.
 download_extract() {
   local url="$1" binary="$2" dest="$3"
   local tmpdir; tmpdir="$(mktemp -d)"
@@ -216,7 +227,7 @@ download_extract() {
   fi
 
   local found
-  found="$(find "$extract_dir" -type f \( -name "$binary" -o -name "${binary}.exe" \) 2>/dev/null | head -1)"
+  found="$(find "$extract_dir" -type f -name "$binary" 2>/dev/null | head -1)"
   if [ -z "$found" ]; then
     error "Binary '$binary' not found inside archive from $url"
     rm -rf "$tmpdir"
@@ -227,7 +238,6 @@ download_extract() {
   rm -rf "$tmpdir"
 }
 
-# Run an official Anchore install script (syft or grype).
 anchore_install() {
   local tool="$1"
   local url="https://raw.githubusercontent.com/anchore/${tool}/main/install.sh"
@@ -240,7 +250,7 @@ anchore_install() {
 }
 
 # ── step 1: prerequisites ─────────────────────────────────────────────────────
-section "Step 1/4 — Checking prerequisites"
+section "Step 1/5 — Checking prerequisites"
 
 MISSING=()
 check go   || MISSING+=("go   → https://go.dev/dl")
@@ -259,10 +269,10 @@ info "OS / Arch  : ${OS} / ${ARCH}"
 info "Install dir: ${INSTALL_DIR}"
 
 # ── step 2: scanner tools ─────────────────────────────────────────────────────
-section "Step 2/4 — Installing scanner tools"
+section "Step 2/5 — Installing scanner tools"
 
 # ── syft ──────────────────────────────────────────────────────────────────────
-if check syft || [ -f "${INSTALL_DIR}/syft${EXT}" ]; then
+if check syft || [ -f "${INSTALL_DIR}/syft" ]; then
   info "syft already installed ($(syft version 2>/dev/null | grep Version | awk '{print $2}' || echo '?'))"
 else
   echo "  Installing syft (latest stable)..."
@@ -278,7 +288,7 @@ else
 fi
 
 # ── grype ─────────────────────────────────────────────────────────────────────
-if check grype || [ -f "${INSTALL_DIR}/grype${EXT}" ]; then
+if check grype || [ -f "${INSTALL_DIR}/grype" ]; then
   info "grype already installed ($(grype version 2>/dev/null | grep Version | awk '{print $2}' || echo '?'))"
 else
   echo "  Installing grype (latest stable)..."
@@ -294,21 +304,18 @@ else
 fi
 
 # ── trivy ─────────────────────────────────────────────────────────────────────
-# Uses the official Trivy install script (https://trivy.dev/docs/latest/getting-started/installation/)
-# which auto-detects OS, architecture, and always installs the latest release.
 if $SKIP_TRIVY; then
   warn "Skipping trivy (--no-trivy)"
-elif check trivy || [ -f "${INSTALL_DIR}/trivy${EXT}" ]; then
+elif check trivy || [ -f "${INSTALL_DIR}/trivy" ]; then
   info "trivy already installed ($(trivy --version 2>/dev/null | grep Version | awk '{print $2}' || echo '?'))"
 else
-  echo "  Installing trivy (latest stable via official script)..."
+  echo "  Installing trivy (latest stable)..."
   ensure_install_dir
   TRIVY_OK=false
 
   if [ "$OS" = "darwin" ] && check brew; then
     brew install aquasecurity/trivy/trivy --quiet 2>&1 | tail -1 && TRIVY_OK=true
   elif [ "$OS" = "linux" ]; then
-    # Prefer apt/rpm package managers for proper system integration.
     if check apt-get && check wget; then
       echo "    Setting up Trivy apt repository..."
       wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
@@ -330,8 +337,6 @@ gpgkey=https://aquasecurity.github.io/trivy-repo/rpm/public.key
 REPO
       $PKG_MGR install -y trivy >/dev/null 2>&1 && TRIVY_OK=true
     fi
-
-    # Fallback: official install script (works on any Linux).
     if ! $TRIVY_OK; then
       echo "    Falling back to official Trivy install script..."
       if curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
@@ -339,24 +344,16 @@ REPO
         TRIVY_OK=true
       fi
     fi
-  elif [ "$OS" = "windows" ]; then
-    # On Windows: resolve latest version then download zip.
-    TV_VERSION="${TRIVY_VERSION:-$(latest_release aquasecurity/trivy)}"
-    TV_ARCHIVE="trivy_${TV_VERSION}_windows-64bit.zip"
-    TV_URL="https://github.com/aquasecurity/trivy/releases/download/v${TV_VERSION}/${TV_ARCHIVE}"
-    if download_extract "$TV_URL" "trivy" "${INSTALL_DIR}/trivy${EXT}"; then
-      TRIVY_OK=true
-    fi
   fi
 
-  $TRIVY_OK && info "trivy installed ($(trivy --version 2>/dev/null | grep Version | awk '{print $2}'))" \
+  $TRIVY_OK && info "trivy installed" \
             || warn "trivy installation failed — extended CVE coverage will be unavailable"
 fi
 
 # ── osv-scanner ───────────────────────────────────────────────────────────────
 if $SKIP_OSV; then
   warn "Skipping osv-scanner (--no-osv)"
-elif check osv-scanner || [ -f "${INSTALL_DIR}/osv-scanner${EXT}" ]; then
+elif check osv-scanner || [ -f "${INSTALL_DIR}/osv-scanner" ]; then
   info "osv-scanner already installed"
 else
   OSV_VERSION="${OSV_VERSION:-$(latest_release google/osv-scanner)}"
@@ -368,33 +365,28 @@ else
     brew install osv-scanner --quiet 2>&1 | tail -1 && OSV_OK=true
   else
     case "$OS-$ARCH" in
-      linux-amd64)   OSV_BIN="osv-scanner_linux_amd64" ;;
-      linux-arm64)   OSV_BIN="osv-scanner_linux_arm64" ;;
-      darwin-amd64)  OSV_BIN="osv-scanner_darwin_amd64" ;;
-      darwin-arm64)  OSV_BIN="osv-scanner_darwin_arm64" ;;
-      windows-amd64) OSV_BIN="osv-scanner_windows_amd64.exe" ;;
-      *)
-        warn "No osv-scanner binary for ${OS}-${ARCH}"
-        OSV_BIN=""
-        ;;
+      linux-amd64)  OSV_BIN="osv-scanner_linux_amd64" ;;
+      linux-arm64)  OSV_BIN="osv-scanner_linux_arm64" ;;
+      darwin-amd64) OSV_BIN="osv-scanner_darwin_amd64" ;;
+      darwin-arm64) OSV_BIN="osv-scanner_darwin_arm64" ;;
+      *)            warn "No osv-scanner binary for ${OS}-${ARCH}"; OSV_BIN="" ;;
     esac
-
     if [ -n "$OSV_BIN" ]; then
       OSV_URL="https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/${OSV_BIN}"
       echo "    Downloading ${OSV_BIN}"
-      if curl -fsSL --retry 3 "$OSV_URL" -o "${INSTALL_DIR}/osv-scanner${EXT}"; then
-        chmod 0755 "${INSTALL_DIR}/osv-scanner${EXT}"
+      if curl -fsSL --retry 3 "$OSV_URL" -o "${INSTALL_DIR}/osv-scanner"; then
+        chmod 0755 "${INSTALL_DIR}/osv-scanner"
         OSV_OK=true
       fi
     fi
   fi
 
   $OSV_OK && info "osv-scanner installed (v${OSV_VERSION})" \
-           || warn "osv-scanner installation failed — Google OSV database scan will be unavailable"
+           || warn "osv-scanner installation failed"
 fi
 
 # ── gitleaks ──────────────────────────────────────────────────────────────────
-if check gitleaks || [ -f "${INSTALL_DIR}/gitleaks${EXT}" ]; then
+if check gitleaks || [ -f "${INSTALL_DIR}/gitleaks" ]; then
   info "gitleaks already installed ($(gitleaks version 2>/dev/null || echo '?'))"
 else
   GITLEAKS_VERSION="${GITLEAKS_VERSION:-$(latest_release gitleaks/gitleaks)}"
@@ -407,15 +399,12 @@ else
   else
     GL_ARCH="$ARCH"
     [ "$GL_ARCH" = "amd64" ] && GL_ARCH="x64"
-
     case "$OS" in
-      windows) GL_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_windows_${GL_ARCH}.zip" ;;
-      darwin)  GL_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_darwin_${GL_ARCH}.tar.gz" ;;
-      linux)   GL_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_${GL_ARCH}.tar.gz" ;;
+      darwin) GL_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_darwin_${GL_ARCH}.tar.gz" ;;
+      linux)  GL_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_${GL_ARCH}.tar.gz" ;;
     esac
-
     GL_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GL_ARCHIVE}"
-    if download_extract "$GL_URL" "gitleaks" "${INSTALL_DIR}/gitleaks${EXT}"; then
+    if download_extract "$GL_URL" "gitleaks" "${INSTALL_DIR}/gitleaks"; then
       GITLEAKS_OK=true
     fi
   fi
@@ -425,16 +414,12 @@ else
 fi
 
 # ── semgrep ───────────────────────────────────────────────────────────────────
-semgrep_works() {
-  semgrep --version >/dev/null 2>&1
-}
+semgrep_works() { semgrep --version >/dev/null 2>&1; }
 
 ensure_pip3() {
   check pip3 && return 0
   check pip  && return 0
-  if [ "$OS" != "linux" ]; then return 1; fi
-
-  echo "  pip3 not found — attempting automatic install..."
+  if ! check python3; then return 1; fi
   if check apt-get; then
     apt-get install -y python3-pip >/dev/null 2>&1 && check pip3 && return 0
   elif check dnf; then
@@ -444,11 +429,7 @@ ensure_pip3() {
   elif check apk; then
     apk add --no-cache py3-pip >/dev/null 2>&1 && check pip3 && return 0
   fi
-
-  if check python3; then
-    python3 -m ensurepip --upgrade >/dev/null 2>&1 && check pip3 && return 0
-  fi
-
+  python3 -m ensurepip --upgrade >/dev/null 2>&1 && check pip3 && return 0
   return 1
 }
 
@@ -457,18 +438,13 @@ if $SKIP_SEMGREP; then
 elif semgrep_works; then
   info "semgrep already installed: $(semgrep --version 2>/dev/null)"
 else
-  # Install latest semgrep (no version pin — pip resolves latest by default).
   SEMGREP_INSTALL_ARG="semgrep"
-  # Allow pinning via env var for reproducible installs.
   [ -n "${SEMGREP_VERSION:-}" ] && SEMGREP_INSTALL_ARG="semgrep==${SEMGREP_VERSION}"
-
   echo "  Installing semgrep (latest stable)..."
   SEMGREP_OK=false
 
   if [ "$OS" = "darwin" ] && check brew; then
     brew install semgrep --quiet 2>&1 | tail -1 && SEMGREP_OK=true
-  elif [ "$OS" = "windows" ]; then
-    : # handled in post-install check below
   elif ensure_pip3; then
     if check pip3; then
       pip3 install --quiet --break-system-packages "$SEMGREP_INSTALL_ARG" 2>/dev/null \
@@ -479,36 +455,15 @@ else
       semgrep_works && SEMGREP_OK=true
     fi
   fi
-
   if ! $SEMGREP_OK && check pipx; then
     pipx install "$SEMGREP_INSTALL_ARG" >/dev/null 2>&1 && semgrep_works && SEMGREP_OK=true
   fi
 
-  if $SEMGREP_OK && ! semgrep_works; then
-    SEMGREP_OK=false
-    if [ "$OS" = "windows" ]; then
-      warn "semgrep installed via pip but cannot run on Windows (native binary missing)."
-      warn "Workaround — use WSL: wsl bash install.sh"
-      warn "SAST code analysis will be skipped on native Windows."
-    fi
-  fi
-
-  if $SEMGREP_OK; then
-    info "semgrep installed: $(semgrep --version 2>/dev/null)"
-  else
-    if [ "$OS" = "windows" ]; then
-      warn "semgrep is not supported on native Windows."
-      warn "Run install.sh inside WSL for full SAST support."
-    else
-      warn "semgrep installation failed — SAST code analysis will be unavailable."
-      warn "Install manually: pip3 install semgrep"
-    fi
-  fi
+  $SEMGREP_OK && info "semgrep installed: $(semgrep --version 2>/dev/null)" \
+              || { warn "semgrep installation failed — SAST code analysis will be unavailable."; warn "Install manually: pip3 install semgrep"; }
 fi
 
 # ── joern ─────────────────────────────────────────────────────────────────────
-# Joern provides static reachability analysis (CPG traversal).
-# Requires Java 11+. Large download (~500MB). Skip with --no-joern.
 joern_works() {
   command -v joern-parse >/dev/null 2>&1 && command -v joern-export >/dev/null 2>&1
 }
@@ -516,12 +471,11 @@ joern_works() {
 if $SKIP_JOERN; then
   warn "Skipping joern (--no-joern) — reachability engine will use fallback (unknown)"
 elif joern_works; then
-  info "joern already installed (joern-parse + joern-export on PATH)"
+  info "joern already installed"
 else
   echo "  Installing joern (latest stable — requires Java 11+)..."
   JOERN_OK=false
 
-  # Verify Java is available (Joern is JVM-based).
   if ! check java; then
     warn "Java not found — joern requires Java 11+."
     if [ "$OS" = "linux" ] && check apt-get; then
@@ -530,41 +484,27 @@ else
     elif [ "$OS" = "darwin" ] && check brew; then
       brew install --quiet openjdk@17 2>&1 | tail -1 || true
     fi
-    if ! check java; then
-      warn "Could not install Java automatically."
-      warn "Install Java 11+ manually, then re-run: bash install.sh"
-      warn "Reachability engine will fall back to unknown until joern is available."
-    fi
   fi
 
-  # joern-install.sh also requires unzip.
   if check java && ! check unzip; then
     echo "    Installing unzip (required by joern)..."
-    if check apt-get; then
-      apt-get install -y unzip >/dev/null 2>&1 || true
-    elif check dnf || check yum; then
-      ${DNF_OR_YUM:-yum} install -y unzip >/dev/null 2>&1 || true
-    fi
+    if check apt-get; then apt-get install -y unzip >/dev/null 2>&1 || true; fi
   fi
 
   if check java; then
-    # Use the official joern-install.sh — always fetches the latest release.
     JOERN_INSTALL_DIR="${HOME}/.local/share/joern"
     echo "    Downloading joern-install.sh..."
     if curl -fsSL --retry 3 \
         https://raw.githubusercontent.com/joernio/joern/master/joern-install.sh \
         -o /tmp/joern-install.sh; then
       chmod +x /tmp/joern-install.sh
-      # Install joern to a fixed directory so we can symlink the binaries.
       if bash /tmp/joern-install.sh --install-dir="$JOERN_INSTALL_DIR" 2>&1; then
         JOERN_CLI="${JOERN_INSTALL_DIR}/joern-cli"
-        # Symlink joern-parse and joern-export into INSTALL_DIR.
         ensure_install_dir
         for bin in joern-parse joern-export joern; do
           BIN_PATH="${JOERN_CLI}/${bin}"
           if [ -f "$BIN_PATH" ]; then
             ln -sf "$BIN_PATH" "${INSTALL_DIR}/${bin}"
-            chmod 0755 "${INSTALL_DIR}/${bin}"
           fi
         done
         joern_works && JOERN_OK=true
@@ -573,18 +513,11 @@ else
     rm -f /tmp/joern-install.sh
   fi
 
-  if $JOERN_OK; then
-    info "joern installed (joern-parse + joern-export)"
-  else
-    warn "joern installation failed — reachability engine will use fallback (unknown)"
-    warn "Install manually: curl -fsSL https://raw.githubusercontent.com/joernio/joern/master/joern-install.sh | bash"
-    warn "Then add joern-cli/ to your PATH."
-  fi
+  $JOERN_OK && info "joern installed" \
+            || warn "joern installation failed — reachability engine will use fallback (unknown)"
 fi
 
 # ── pandoc ────────────────────────────────────────────────────────────────────
-# Pandoc is used by `supplychain-kit report --format docx` to convert Markdown
-# to Word documents. Optional — text/markdown reports work without it.
 if $SKIP_PANDOC; then
   warn "Skipping pandoc (--no-pandoc) — DOCX report generation will be unavailable"
 elif check pandoc; then
@@ -595,10 +528,8 @@ else
 
   if [ "$OS" = "darwin" ] && check brew; then
     brew install pandoc --quiet 2>&1 | tail -1 && PANDOC_OK=true
-
   elif [ "$OS" = "linux" ]; then
     if check apt-get; then
-      # Debian/Ubuntu — install from official .deb release (apt version is often outdated).
       PANDOC_VERSION="$(latest_release jgm/pandoc)"
       PANDOC_DEB="pandoc-${PANDOC_VERSION}-1-amd64.deb"
       PANDOC_URL="https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/${PANDOC_DEB}"
@@ -607,10 +538,7 @@ else
         dpkg -i "/tmp/${PANDOC_DEB}" >/dev/null 2>&1 && PANDOC_OK=true
         rm -f "/tmp/${PANDOC_DEB}"
       fi
-      # Fallback: apt (older version but always works).
-      if ! $PANDOC_OK; then
-        apt-get install -y pandoc >/dev/null 2>&1 && PANDOC_OK=true
-      fi
+      ! $PANDOC_OK && apt-get install -y pandoc >/dev/null 2>&1 && PANDOC_OK=true
     elif check dnf; then
       dnf install -y pandoc >/dev/null 2>&1 && PANDOC_OK=true
     elif check yum; then
@@ -618,57 +546,155 @@ else
     elif check apk; then
       apk add --no-cache pandoc >/dev/null 2>&1 && PANDOC_OK=true
     fi
-
-    # Universal Linux fallback: download static binary tarball.
     if ! $PANDOC_OK; then
       PANDOC_VERSION="${PANDOC_VERSION:-$(latest_release jgm/pandoc)}"
       PANDOC_TAR="pandoc-${PANDOC_VERSION}-linux-amd64.tar.gz"
       [ "$ARCH" = "arm64" ] && PANDOC_TAR="pandoc-${PANDOC_VERSION}-linux-arm64.tar.gz"
       PANDOC_URL="https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/${PANDOC_TAR}"
-      echo "    Trying static binary: ${PANDOC_TAR}..."
-      if download_extract "$PANDOC_URL" "pandoc" "${INSTALL_DIR}/pandoc"; then
-        PANDOC_OK=true
-      fi
-    fi
-
-  elif [ "$OS" = "windows" ]; then
-    PANDOC_VERSION="$(latest_release jgm/pandoc)"
-    PANDOC_ZIP="pandoc-${PANDOC_VERSION}-windows-x86_64.zip"
-    PANDOC_URL="https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/${PANDOC_ZIP}"
-    if download_extract "$PANDOC_URL" "pandoc" "${INSTALL_DIR}/pandoc${EXT}"; then
-      PANDOC_OK=true
+      download_extract "$PANDOC_URL" "pandoc" "${INSTALL_DIR}/pandoc" && PANDOC_OK=true
     fi
   fi
 
-  if $PANDOC_OK; then
-    info "pandoc installed ($(pandoc --version 2>/dev/null | head -1))"
-  else
-    warn "pandoc installation failed — DOCX report generation will be unavailable"
-    warn "Install manually: https://pandoc.org/installing.html"
-    warn "Markdown reports (--format markdown) work without pandoc."
-  fi
+  $PANDOC_OK && info "pandoc installed ($(pandoc --version 2>/dev/null | head -1))" \
+             || { warn "pandoc installation failed — DOCX reports unavailable"; warn "Install manually: https://pandoc.org/installing.html"; }
 fi
 
-# ── step 3: build supplychain-kit from source ──────────────────────────────────
-section "Step 3/4 — Building supplychain-kit from source"
+# ── step 3: build supplychain-kit from source ─────────────────────────────────
+section "Step 3/5 — Building supplychain-kit"
 
 cd "$SCRIPT_DIR"
+
+# Embed version via git describe (e.g. v0.8.0-3-gabcdef).
+GIT_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev")"
+echo "  Version : ${GIT_VERSION}"
 
 echo "  Downloading Go modules..."
 go mod download
 
 echo "  Compiling supplychain-kit..."
 mkdir -p "${SCRIPT_DIR}/bin"
-BINARY_PATH="${SCRIPT_DIR}/bin/${BINARY_NAME}${EXT}"
-go build -ldflags="-s -w" -o "$BINARY_PATH" ./cmd/supplychain-kit/...
-info "Binary built → ${BINARY_PATH}"
+BINARY_PATH="${SCRIPT_DIR}/bin/${BINARY_NAME}"
+go build \
+  -ldflags="-s -w -X main.version=${GIT_VERSION}" \
+  -trimpath \
+  -o "$BINARY_PATH" \
+  ./cmd/supplychain-kit/...
+info "Binary built → ${BINARY_PATH} (${GIT_VERSION})"
 
-# ── step 4: install supplychain-kit to PATH ─────────────────────────────────────
-section "Step 4/4 — Installing supplychain-kit"
+# ── step 4: install supplychain-kit binary to PATH ────────────────────────────
+section "Step 4/5 — Installing supplychain-kit binary"
 
 ensure_install_dir
-copy_bin "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}${EXT}"
-info "supplychain-kit installed → ${INSTALL_DIR}/${BINARY_NAME}${EXT}"
+
+# Try /usr/local/bin, then sudo, then INSTALL_DIR.
+if [ -w "/usr/local/bin" ]; then
+  copy_bin "$BINARY_PATH" "/usr/local/bin/${BINARY_NAME}"
+  info "supplychain-kit installed → /usr/local/bin/${BINARY_NAME}"
+elif check sudo; then
+  sudo cp "$BINARY_PATH" "/usr/local/bin/${BINARY_NAME}"
+  sudo chmod 0755 "/usr/local/bin/${BINARY_NAME}"
+  info "supplychain-kit installed → /usr/local/bin/${BINARY_NAME} (via sudo)"
+else
+  copy_bin "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}"
+  info "supplychain-kit installed → ${INSTALL_DIR}/${BINARY_NAME}"
+fi
+
+# ── step 5: install Claude Code skill ─────────────────────────────────────────
+section "Step 5/5 — Installing Claude Code skill"
+
+SKILL_SRC="${SCRIPT_DIR}/.claude/skills/supplychain-kit"
+
+if [ ! -d "$SKILL_SRC" ]; then
+  warn "Skill source not found at $SKILL_SRC — skipping skill install"
+else
+  # Detect Claude Code home(s).
+  detect_claude_homes() {
+    local homes=()
+    for d in "$HOME/.claude" "$HOME"/.claude-*; do
+      if [ -d "$d" ] && { [ -f "$d/settings.json" ] || [ -f "$d/settings.local.json" ] || [ -d "$d/skills" ]; }; then
+        homes+=("$d")
+      fi
+    done
+    if [ ${#homes[@]} -eq 0 ] && [ -d "$HOME/.claude" ]; then
+      homes=("$HOME/.claude")
+    elif [ ${#homes[@]} -eq 0 ]; then
+      # Claude Code not yet run — create default home.
+      mkdir -p "$HOME/.claude/skills"
+      homes=("$HOME/.claude")
+    fi
+    printf '%s\n' "${homes[@]}"
+  }
+
+  if [ -n "${CLAUDE_HOME:-}" ]; then
+    IFS=',' read -ra SELECTED_HOMES <<< "$CLAUDE_HOME"
+  else
+    mapfile -t SELECTED_HOMES < <(detect_claude_homes)
+  fi
+
+  for claude_home in "${SELECTED_HOMES[@]}"; do
+    skill_dir="${claude_home}/skills/supplychain-kit"
+    agents_dir="${claude_home}/agents"
+    mkdir -p "$(dirname "$skill_dir")" "$agents_dir"
+
+    # Backup if exists and is not already our symlink.
+    if [ -d "$skill_dir" ] && [ ! -L "$skill_dir" ]; then
+      backup_base="${HOME}/.supplychain-kit/backups"
+      mkdir -p "$backup_base"
+      backup_name="skill.backup.$(date +%s)"
+      mv "$skill_dir" "${backup_base}/${backup_name}"
+      warn "Previous skill backed up → ${backup_base}/${backup_name}"
+    elif [ -L "$skill_dir" ]; then
+      rm "$skill_dir"
+    fi
+
+    if $USE_SYMLINK; then
+      ln -sf "$SKILL_SRC" "$skill_dir"
+      info "Skill → $skill_dir (symlink to repo — live edits enabled)"
+    else
+      mkdir -p "$skill_dir"
+      cp -r "${SKILL_SRC}/"* "$skill_dir/"
+      info "Skill → $skill_dir (copied)"
+    fi
+
+    # Install agents.
+    agents_src="${SCRIPT_DIR}/.claude/agents"
+    if [ -d "$agents_src" ]; then
+      for agent in "${agents_src}/"*.md; do
+        [ -f "$agent" ] || continue
+        name="$(basename "$agent")"
+        dst="${agents_dir}/${name}"
+        # Avoid overwriting non-supplychain-kit agents.
+        if [ -f "$dst" ] && ! grep -qi "supplychain-kit" "$dst" 2>/dev/null; then
+          dst="${agents_dir}/supplychain-kit-${name}"
+        fi
+        cp "$agent" "$dst"
+      done
+      info "Agents → ${agents_dir}"
+    fi
+
+    # Write install metadata.
+    cat > "${skill_dir}/.install-info.json" <<INFOEOF
+{
+  "installed_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "version": "${GIT_VERSION}",
+  "method": "$([ "$USE_SYMLINK" = true ] && echo 'symlink' || echo 'copy')",
+  "source": "${SCRIPT_DIR}",
+  "claude_home": "${claude_home}"
+}
+INFOEOF
+  done
+fi
+
+# ── step 6: verify ─────────────────────────────────────────────────────────────
+if ! $SKIP_TEST; then
+  echo ""
+  echo "  Running go test ./... (pass --skip-test to skip)..."
+  if go test ./... -count=1 2>&1 | tail -10; then
+    info "All tests pass"
+  else
+    warn "Some tests failed — check output above"
+  fi
+fi
 
 # ── summary ───────────────────────────────────────────────────────────────────
 echo ""
@@ -676,25 +702,32 @@ echo -e "${BOLD}${GREEN}══════════════════�
 echo -e "${BOLD}${GREEN}  supplychain-kit installed successfully!   ${RESET}"
 echo -e "${BOLD}${GREEN}════════════════════════════════════════════${RESET}"
 echo ""
+echo -e "${BOLD}Version:${RESET} ${GIT_VERSION}"
+echo ""
 echo -e "${BOLD}Scanner tools:${RESET}"
 for bin in syft grype trivy osv-scanner gitleaks semgrep joern-parse joern-export pandoc; do
-  if check "$bin" || [ -f "${INSTALL_DIR}/${bin}" ] || [ -f "${INSTALL_DIR}/${bin}.exe" ]; then
+  if check "$bin" || [ -f "${INSTALL_DIR}/${bin}" ]; then
     echo -e "  ${GREEN}✓${RESET} ${bin}"
   else
     echo -e "  ${YELLOW}✗${RESET} ${bin}  (not installed — that scanner will be skipped)"
   fi
 done
-echo -e "  ${GREEN}✓${RESET} supplychain-kit → ${INSTALL_DIR}/${BINARY_NAME}${EXT}"
+echo -e "  ${GREEN}✓${RESET} supplychain-kit"
+echo ""
+echo -e "${BOLD}Claude Code skill:${RESET}"
+if [ -n "${SELECTED_HOMES[*]:-}" ]; then
+  for h in "${SELECTED_HOMES[@]}"; do
+    mode="$([ "$USE_SYMLINK" = true ] && echo 'symlink' || echo 'copy')"
+    echo -e "  ${GREEN}✓${RESET} $h/skills/supplychain-kit  (${mode})"
+  done
+else
+  echo -e "  ${YELLOW}✗${RESET} Skill not installed (skill source missing)"
+fi
 
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo ""
   echo -e "${YELLOW}${BOLD}PATH setup required:${RESET}"
-  if [ "$OS" = "windows" ]; then
-    echo -e "  Option A — add to Git Bash profile (${SHELL_PROFILE}):"
-    echo -e "    ${CYAN}echo 'export PATH=\"\$PATH:${INSTALL_DIR}\"' >> ${SHELL_PROFILE}${RESET}"
-    echo -e "  Option B — add via Windows Settings:"
-    echo -e "    System → Advanced → Environment Variables → Path → New → ${INSTALL_DIR}"
-  elif [ "$(basename "${SHELL:-bash}")" = "fish" ]; then
+  if [ "$(basename "${SHELL:-bash}")" = "fish" ]; then
     echo -e "  Run: ${CYAN}fish_add_path ${INSTALL_DIR}${RESET}"
   else
     echo -e "  Run: ${CYAN}echo 'export PATH=\"\$PATH:${INSTALL_DIR}\"' >> ${SHELL_PROFILE}${RESET}"
@@ -703,13 +736,15 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
 fi
 
 echo ""
-echo -e "${BOLD}Quick start (after reloading shell):${RESET}"
-echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode sca${RESET}"
-echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode sast${RESET}"
-echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode all --target myapp${RESET}"
-echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --out findings.json${RESET}"
-echo -e "  ${CYAN}supplychain-kit sbom --repo /path/to/project --out sbom.json${RESET}"
-echo -e "  ${CYAN}supplychain-kit gate --findings findings.json${RESET}"
+echo -e "${BOLD}Quick start:${RESET}"
+echo -e "  1. Open a new terminal (or reload shell profile)"
+echo -e "  2. In any project directory: ${CYAN}claude${RESET}"
+echo -e "  3. Run the skill: ${CYAN}/supplychain-kit${RESET}"
+echo -e "     → Follow the prompts to scan your repository"
+echo ""
+echo -e "  CLI direct usage:"
+echo -e "  ${CYAN}supplychain-kit scan --repo /path/to/project --mode all${RESET}"
+echo -e "  ${CYAN}supplychain-kit report --engagement myapp --format all${RESET}"
 echo ""
 echo -e "To uninstall: ${YELLOW}bash uninstall.sh${RESET}"
 echo ""

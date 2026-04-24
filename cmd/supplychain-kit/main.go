@@ -38,10 +38,14 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
 )
 
+// version is set at build time: go build -ldflags "-X main.version=$(git describe --tags --always)"
+var version = "dev"
+
 func main() {
 	root := &cobra.Command{
-		Use:   "supplychain-kit",
-		Short: "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
+		Use:     "supplychain-kit",
+		Short:   "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
+		Version: version,
 	}
 	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), analyzeCmd(), reportCmd(), installHooksCmd())
 	if err := root.Execute(); err != nil {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -672,7 +673,14 @@ func writeMarkdownReport(path, engagement string, findings []*models.Finding) er
 	return nil
 }
 
-func convertToDOCX(_, _ string) error {
-	// Implemented in step 6 (supplychain-kit report command).
-	return fmt.Errorf("DOCX conversion via pandoc will be implemented in step 6 — use format=markdown for now")
+func convertToDOCX(mdPath, docxPath string) error {
+	if _, err := exec.LookPath("pandoc"); err != nil {
+		return fmt.Errorf("pandoc not found in PATH — install pandoc to generate DOCX output")
+	}
+	cmd := exec.Command("pandoc", mdPath, "-o", docxPath, "--toc", "--highlight-style=tango")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pandoc: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

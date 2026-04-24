@@ -1,0 +1,44 @@
+### [{{.Index}}] [{{.Severity}}] {{.RuleID}}
+
+| Field | Value |
+|---|---|
+| **Finding ID** | `{{.ID}}` |
+| **Package** | `{{.Package}} {{.Version}}` |
+| **Fixed In** | `{{if .FixedVersion}}{{.FixedVersion}}{{else}}unknown{{end}}` |
+| **CVSS** | {{printf "%.1f" .CVSS}} |
+| **Reachability** | {{.Reachability}} |
+| **Risk Score** | {{printf "%.2f" .RiskScore}} |
+| **Location** | {{.Location}} |
+{{- if .AdvisoryURL}}
+| **Advisory** | {{.AdvisoryURL}} |
+{{- end}}
+
+{{- if .Description}}
+
+> {{.Description}}
+{{- end}}
+
+**Remediation**
+
+{{- if .FixedVersion}}
+- Upgrade `{{.Package}}` to ≥`{{.FixedVersion}}`
+{{- else}}
+- No fixed version available — monitor upstream for patch
+{{- end}}
+- Reachability: {{.ReachabilityNote}}
+
+{{- if .AIRemediation}}
+
+**AI Analysis** *(Claude)*
+
+| | |
+|---|---|
+| **Priority** | `{{.AIRemediation.Priority}}` |
+| **Explanation** | {{.AIRemediation.Explanation}} |
+| **Upgrade command** | `{{.AIRemediation.UpgradeCommand}}` |
+| **Breaking changes** | {{.AIRemediation.BreakingChanges}} |
+| **Verify** | `{{.AIRemediation.VerifyStep}}` |
+| **References** | {{.AIRemediation.References}} |
+{{- end}}
+
+---

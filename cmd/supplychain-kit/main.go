@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"text/template"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -41,7 +43,7 @@ func main() {
 		Use:   "supplychain-kit",
 		Short: "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
 	}
-	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), analyzeCmd())
+	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), analyzeCmd(), reportCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -1418,6 +1420,237 @@ func printRemediation(r *claudeai.Remediation) {
 		fmt.Fprintf(os.Stderr, "    Verify       : %s\n", r.VerifyStep)
 	}
 	fmt.Fprintln(os.Stderr)
+}
+
+// ── report command ────────────────────────────────────────────────────────────
+
+func reportCmd() *cobra.Command {
+	var (
+		engagement   string
+		format       string
+		remFile      string
+		tmplPath     string
+	)
+	cmd := &cobra.Command{
+		Use:   "report",
+		Short: "Generate Markdown (and optionally DOCX) security report for an engagement",
+		Long: `Render all findings for an engagement into a structured security report.
+
+Reads:
+  results/<engagement>/findings/findings.json   — required
+  results/<engagement>/remediation.json         — optional AI remediation overlay
+
+Writes:
+  results/<engagement>/reports/report.md        — always
+  results/<engagement>/reports/report.docx      — when --format docx|all (requires pandoc)
+
+Uses configs/report-templates/finding.md.tmpl for per-finding sections.
+Optionally provide --template to override the built-in template.
+
+Examples:
+  supplychain-kit report --engagement myapp-2026q1
+  supplychain-kit report --engagement myapp-2026q1 --format docx
+  supplychain-kit report --engagement myapp-2026q1 --format all --remediation remediation.json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if engagement == "" {
+				return fmt.Errorf("--engagement required")
+			}
+			if format == "" {
+				format = "markdown"
+			}
+
+			findingsPath := filepath.Join("results", engagement, "findings", "findings.json")
+			findings, err := readFindings(findingsPath)
+			if err != nil {
+				return fmt.Errorf("read findings: %w — run scan first", err)
+			}
+
+			// Optional AI remediation overlay.
+			remByID := map[string]*claudeai.Remediation{}
+			if remFile != "" {
+				raw, err := os.ReadFile(remFile)
+				if err != nil {
+					return fmt.Errorf("read remediation: %w", err)
+				}
+				var rems []*claudeai.Remediation
+				if err := json.Unmarshal(raw, &rems); err != nil {
+					return fmt.Errorf("parse remediation: %w", err)
+				}
+				for _, r := range rems {
+					if r != nil {
+						remByID[r.FindingID] = r
+					}
+				}
+			} else {
+				// Auto-load from default path if it exists.
+				defaultRem := filepath.Join("results", engagement, "remediation.json")
+				if raw, err := os.ReadFile(defaultRem); err == nil {
+					var rems []*claudeai.Remediation
+					if json.Unmarshal(raw, &rems) == nil {
+						for _, r := range rems {
+							if r != nil {
+								remByID[r.FindingID] = r
+							}
+						}
+					}
+				}
+			}
+
+			// Load finding template.
+			if tmplPath == "" {
+				tmplPath = filepath.Join("configs", "report-templates", "finding.md.tmpl")
+			}
+
+			reportDir := filepath.Join("results", engagement, "reports")
+			_ = os.MkdirAll(reportDir, 0o755)
+
+			mdPath := filepath.Join(reportDir, "report.md")
+			if err := renderMarkdownReport(mdPath, engagement, findings, remByID, tmplPath); err != nil {
+				return fmt.Errorf("render markdown: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "  report.md → %s\n", mdPath)
+
+			if format == "docx" || format == "all" {
+				docxPath := filepath.Join(reportDir, "report.docx")
+				if err := runPandoc(mdPath, docxPath); err != nil {
+					fmt.Fprintf(os.Stderr, "  [warn] DOCX skipped: %v\n", err)
+				} else {
+					fmt.Fprintf(os.Stderr, "  report.docx → %s\n", docxPath)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement name (results/<engagement>/)")
+	cmd.Flags().StringVar(&format, "format", "markdown", "output format: markdown | docx | all")
+	cmd.Flags().StringVar(&remFile, "remediation", "", "path to AI remediation JSON (default: results/<engagement>/remediation.json)")
+	cmd.Flags().StringVar(&tmplPath, "template", "", "override finding template (default: configs/report-templates/finding.md.tmpl)")
+	_ = cmd.MarkFlagRequired("engagement")
+	return cmd
+}
+
+// findingTemplateData is the data passed to the finding.md.tmpl template.
+type findingTemplateData struct {
+	Index           int
+	ID              string
+	RuleID          string
+	Severity        string
+	Package         string
+	Version         string
+	FixedVersion    string
+	CVSS            float64
+	Reachability    string
+	RiskScore       float64
+	Location        string
+	Description     string
+	AdvisoryURL     string
+	ReachabilityNote string
+	AIRemediation   *claudeai.Remediation
+}
+
+func renderMarkdownReport(path, engagement string, findings []*models.Finding, remByID map[string]*claudeai.Remediation, tmplPath string) error {
+	// Load and parse the per-finding template.
+	tmplSrc, err := os.ReadFile(tmplPath)
+	if err != nil {
+		return fmt.Errorf("read template %s: %w", tmplPath, err)
+	}
+	tmpl, err := template.New("finding").Parse(string(tmplSrc))
+	if err != nil {
+		return fmt.Errorf("parse template: %w", err)
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	counts := map[models.Severity]int{}
+	for _, fn := range findings {
+		counts[fn.Severity]++
+	}
+
+	fmt.Fprintf(f, "# Supply Chain Security Report — %s\n\n", engagement)
+	fmt.Fprintf(f, "Generated: %s\n\n", time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+
+	fmt.Fprintf(f, "## Executive Summary\n\n")
+	fmt.Fprintf(f, "Total findings: **%d**\n\n", len(findings))
+	if len(findings) > 0 {
+		fmt.Fprintf(f, "| Severity | Count |\n|---|---|\n")
+		for _, sev := range []models.Severity{
+			models.SeverityCritical, models.SeverityHigh,
+			models.SeverityMedium, models.SeverityLow, models.SeverityInfo,
+		} {
+			if n := counts[sev]; n > 0 {
+				fmt.Fprintf(f, "| %s | %d |\n", strings.ToUpper(string(sev)), n)
+			}
+		}
+		fmt.Fprintf(f, "\n")
+	}
+
+	if len(remByID) > 0 {
+		fmt.Fprintf(f, "> AI remediation guidance (Claude) is included for %d findings.\n\n", len(remByID))
+	}
+
+	fmt.Fprintf(f, "## Findings\n\n")
+	if len(findings) == 0 {
+		fmt.Fprintf(f, "No vulnerabilities found.\n")
+		return nil
+	}
+
+	for i, fn := range findings {
+		loc := fn.FilePath
+		if loc == "" {
+			loc = "—"
+		} else if fn.Line > 0 {
+			loc = fmt.Sprintf("%s:%d", loc, fn.Line)
+		}
+		data := findingTemplateData{
+			Index:            i + 1,
+			ID:               fn.ID,
+			RuleID:           fn.RuleID,
+			Severity:         strings.ToUpper(string(fn.Severity)),
+			Package:          fn.Package,
+			Version:          fn.Version,
+			FixedVersion:     fn.FixedVersion,
+			CVSS:             fn.CVSS,
+			Reachability:     string(fn.Reachability),
+			RiskScore:        fn.RiskScore,
+			Location:         loc,
+			Description:      fn.Description,
+			AdvisoryURL:      fn.AdvisoryURL,
+			ReachabilityNote: reachabilityNote(fn.Reachability),
+			AIRemediation:    remByID[fn.ID],
+		}
+		if err := tmpl.Execute(f, data); err != nil {
+			fmt.Fprintf(f, "\n<!-- template error for finding %s: %v -->\n\n", fn.ID, err)
+		}
+	}
+	return nil
+}
+
+func reachabilityNote(r models.Reachability) string {
+	switch r {
+	case models.ReachReachable, models.ReachConfirmed:
+		return "Confirmed reachable — highest priority"
+	case models.ReachUnknown:
+		return "Reachability unknown — treat as reachable"
+	case models.ReachUnreachable:
+		return "No reachable path detected — still patch at next sprint"
+	default:
+		return string(r)
+	}
+}
+
+func runPandoc(mdPath, docxPath string) error {
+	if _, err := exec.LookPath("pandoc"); err != nil {
+		return fmt.Errorf("pandoc not found in PATH — install from https://pandoc.org")
+	}
+	out, err := exec.Command("pandoc", mdPath, "-o", docxPath, "--toc", "--highlight-style=tango").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pandoc: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // sortFindingsByPriority sorts findings: reachable CRITICAL first, reachable HIGH,

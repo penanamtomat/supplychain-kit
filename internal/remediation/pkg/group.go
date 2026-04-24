@@ -401,18 +401,6 @@ func (g *Grouper) GetQuickFixCommands() []string {
 	return commands
 }
 
-// GetAffectedPackagesCount returns count of affected packages by ecosystem.
-func (g *Grouper) GetAffectedPackagesCount() map[Ecosystem]int {
-	packages := g.GroupByPackage()
-	counts := make(map[Ecosystem]int)
-
-	for _, pr := range packages {
-		counts[pr.Ecosystem]++
-	}
-
-	return counts
-}
-
 // GetUpgradeImpact analyzes what would happen if all packages are upgraded.
 func (g *Grouper) GetUpgradeImpact() map[string]interface{} {
 	packages := g.GroupByPackage()

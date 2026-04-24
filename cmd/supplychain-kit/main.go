@@ -212,16 +212,6 @@ func resolveTargetDir(target string) (string, error) {
 	return resolved, nil
 }
 
-// inferTargetName extracts a target name from a repo path or URL.
-func inferTargetName(repo string) string {
-	if isLocalPath(repo) {
-		return filepath.Base(repo)
-	}
-	// From URL like https://github.com/org/repo.git → repo
-	parts := strings.Split(strings.TrimSuffix(repo, ".git"), "/")
-	return parts[len(parts)-1]
-}
-
 // writeTargetReports writes findings.json, findings.txt, and summary.json
 // into the target directory.
 func writeTargetReports(dir string, findings []*models.Finding, repo, mode string) {
@@ -1582,48 +1572,6 @@ func runPandoc(mdPath, docxPath string) error {
 		return fmt.Errorf("pandoc: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-// sortFindingsByPriority sorts findings: reachable CRITICAL first, reachable HIGH,
-// unknown CRITICAL, then remaining by severity desc.
-func sortFindingsByPriority(findings []*models.Finding) {
-	reachPriority := func(r models.Reachability) int {
-		switch r {
-		case models.ReachReachable, models.ReachConfirmed:
-			return 0
-		case models.ReachUnknown:
-			return 1
-		default:
-			return 2
-		}
-	}
-	sevPriority := func(s models.Severity) int {
-		switch s {
-		case models.SeverityCritical:
-			return 0
-		case models.SeverityHigh:
-			return 1
-		case models.SeverityMedium:
-			return 2
-		case models.SeverityLow:
-			return 3
-		default:
-			return 4
-		}
-	}
-	// Simple insertion sort — finding sets are typically small (<200).
-	for i := 1; i < len(findings); i++ {
-		for j := i; j > 0; j-- {
-			a, b := findings[j-1], findings[j]
-			ra, rb := reachPriority(a.Reachability), reachPriority(b.Reachability)
-			sa, sb := sevPriority(a.Severity), sevPriority(b.Severity)
-			if ra > rb || (ra == rb && sa > sb) {
-				findings[j-1], findings[j] = findings[j], findings[j-1]
-			} else {
-				break
-			}
-		}
-	}
 }
 
 // ── install-hooks command ─────────────────────────────────────────────────────

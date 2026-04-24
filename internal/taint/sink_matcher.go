@@ -80,14 +80,12 @@ func extractSymbolFromFinding(f *models.Finding) string {
 // Match checks if any sink is reachable from tainted sources.
 func (m *Matcher) Match() []MatchResult {
 	var results []MatchResult
-
 	for _, sink := range m.sinks {
 		result := m.matchSink(sink)
 		if result.Exploitable {
 			results = append(results, result)
 		}
 	}
-
 	return results
 }
 

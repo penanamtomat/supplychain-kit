@@ -77,13 +77,6 @@ func (g *Graph) UpdateRiskScore(id string, score float64) {
 	}
 }
 
-// UpdateLicenses updates the licenses for a node.
-func (g *Graph) UpdateLicenses(id string, licenses []string) {
-	if node, exists := g.Nodes[id]; exists {
-		node.Licenses = licenses
-	}
-}
-
 // GetCriticalPath finds the path from root to most critical vulnerable package.
 func (g *Graph) GetCriticalPath(root string) []string {
 	// Find node with highest risk score
@@ -148,17 +141,6 @@ func (g *Graph) GetVulnerablePackages() []*Node {
 	})
 
 	return vulnerable
-}
-
-// GetDirectDependencies returns direct dependencies of a node.
-func (g *Graph) GetDirectDependencies(nodeID string) []string {
-	var deps []string
-	for _, edge := range g.Edges {
-		if edge.From == nodeID && edge.Type == "direct" {
-			deps = append(deps, edge.To)
-		}
-	}
-	return deps
 }
 
 // GetDependents returns packages that depend on the given node.

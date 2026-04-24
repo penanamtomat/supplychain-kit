@@ -108,3 +108,4 @@ func LoadSBOM(path, assetID string) (*models.SBOM, error) {
 	}
 	return sb, nil
 }
+

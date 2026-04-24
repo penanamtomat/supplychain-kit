@@ -355,8 +355,6 @@ func (d *Detector) vertexLine(v *reachability.Vertex) int {
 }
 
 func (d *Detector) extractParams(name string) string {
-	// Extract parameter names from function signature
-	// For now, return simplified indicator
 	if idx := strings.LastIndex(name, "("); idx > 0 {
 		params := name[idx+1:]
 		if idx2 := strings.Index(params, ")"); idx2 > 0 {

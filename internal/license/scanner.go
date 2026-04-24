@@ -3,7 +3,6 @@
 package license
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -113,13 +112,6 @@ func (s *Scanner) ScanPackageDir(pkgDir string) (*PackageLicense, error) {
 	s.evaluateCompliance(pl)
 
 	return pl, nil
-}
-
-// ScanFromSBOM extracts license information from an SBOM.
-func (s *Scanner) ScanFromSBOM(sbomPath string) ([]*PackageLicense, error) {
-	// This would parse CycloneDX SBOM for license data
-	// For now, return empty
-	return []*PackageLicense{}, nil
 }
 
 // detectLicenses attempts to detect licenses from text content.
@@ -373,42 +365,3 @@ func FindLicenseFiles(rootDir string) ([]string, error) {
 	return licenseFiles, err
 }
 
-// ReadPackageJSON reads package.json for license field.
-func ReadPackageJSON(pkgDir string) (string, error) {
-	pkgJSONPath := filepath.Join(pkgDir, "package.json")
-	if _, err := os.Stat(pkgJSONPath); err != nil {
-		return "", nil
-	}
-
-	file, err := os.Open(pkgJSONPath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	inLicense := false
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "\"license\"") {
-			inLicense = true
-			// Extract license value from same line
-			if idx := strings.Index(line, ":"); idx > 0 {
-				value := strings.TrimSpace(line[idx+1:])
-				value = strings.Trim(value, ",\"'")
-				return value, nil
-			}
-			continue
-		}
-		if inLicense {
-			value := strings.Trim(line, ",\"'")
-			if value != "" {
-				return value, nil
-			}
-			inLicense = false
-		}
-	}
-
-	return "", nil
-}

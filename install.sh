@@ -52,14 +52,15 @@ SKIP_JOERN=false
 SKIP_PANDOC=false
 INSTALL_DIR="${INSTALL_DIR:-}"
 
-for arg in "$@"; do
+while [[ $# -gt 0 ]]; do
+  arg="$1"; shift
   case "$arg" in
     --no-semgrep)   SKIP_SEMGREP=true ;;
     --no-trivy)     SKIP_TRIVY=true ;;
     --no-osv)       SKIP_OSV=true ;;
     --no-joern)     SKIP_JOERN=true ;;
     --no-pandoc)    SKIP_PANDOC=true ;;
-    --prefix)       shift; INSTALL_DIR="$1" ;;
+    --prefix)       INSTALL_DIR="$1"; shift ;;
     --prefix=*)     INSTALL_DIR="${arg#--prefix=}" ;;
     --help|-h)
       cat <<EOF
@@ -89,6 +90,7 @@ EOF
       ;;
   esac
 done
+
 
 # ── OS / arch detection ───────────────────────────────────────────────────────
 _uname_s="$(uname -s)"

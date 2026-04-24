@@ -396,7 +396,7 @@ Command baru untuk bootstrap engagement (mirip `pentest-kit init`).
 - [x] Unit test source_detector: fixture HTTP handlers berbagai framework → detect sources correctly
 - [x] Unit test propagator: fixture call graph dengan taint chain → propagasi benar
 - [x] Unit test sink_matcher: fixture CVE sink symbols → match dengan CPG nodes
-- [ ] E2E test: repo dengan known vulnerable pattern → output `confirmed_exploitable` dengan path yang benar (deferred — requires full Joern setup)
+- [x] E2E test: repo dengan known vulnerable pattern → output `confirmed_exploitable` dengan path yang benar (`go test -tags integration`)
 
 **Catatan Implementasi:**
 - Engine menggunakan BFS untuk trace taint path dari sources ke sinks

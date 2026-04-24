@@ -200,6 +200,11 @@ Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pad
 
 **Target publikasi:** BlackHat Europe (proposal level)
 
+**Catatan Penting:**
+- API remediation Claude terpisah (`--ai` flag) telah digantikan dengan template-based remediation (internal/remediation)
+- Gunakan template-based sebagai default untuk analisis findings
+- Claude Code session analysis (Opsi 3 di bawah) adalah fitur opsional untuk improvement masa depan
+
 ---
 
 ### 1. MCP Server (Prioritas Utama — Entry Point Otomasi)
@@ -458,3 +463,12 @@ User: /security-scan
 ```
 
 _Pick any unchecked item, open an issue, and submit a PR to `dev`._
+	### 6. AI-Powered Remediation via Claude Code Session
+
+	- [ ] Tool `analyze_finding_claude` - kirim single finding ke Claude Code untuk analisis
+	- [ ] CLI flag `--use-session` - untuk memilih Claude Code session
+	- [ ] Session context: repo path, engagement, scan results terkirim ke Claude Code
+	- [ ] Prompt optimization: analisis findings dalam konteks session yang kaya
+	- [ ] Graceful degradation: jika Claude Code tidak tersedia, fallback ke template-based
+
+	**Catatan:** Fitur ini opsional untuk improvement masa depan. Default tetap gunakan template-based remediation.

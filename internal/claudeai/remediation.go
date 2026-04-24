@@ -1,4 +1,8 @@
 // Package claudeai integrates the Anthropic Claude API for AI-powered finding analysis.
+//
+// DEPRECATED: This package is superseded by internal/remediation (template-based analysis).
+// Kept for backward compatibility. Use internal/remediation for new development.
+//
 // Requires ANTHROPIC_API_KEY environment variable. Gracefully skipped if absent.
 package claudeai
 

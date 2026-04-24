@@ -129,145 +129,157 @@ type PathAnalysis struct {
 }
 
 func LoadCPG(path string) (*CPG, error) {
-	var verticesData, edgesData []byte
-
-	// Check if path is a directory (Joern export format)
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat CPG path: %w", err)
 	}
 
+	var raw []byte
+
 	if info.IsDir() {
-		// Joern graphson export creates a directory with ~1 (vertices) and ~2 (edges)
-		verticesFile := filepath.Join(path, "~1")
-		edgesFile := filepath.Join(path, "~2")
-
-		verticesData, err = os.ReadFile(verticesFile)
-		if err != nil {
-			return nil, fmt.Errorf("read vertices file: %w", err)
-		}
-
-		edgesData, err = os.ReadFile(edgesFile)
-		if err != nil {
-			return nil, fmt.Errorf("read edges file: %w", err)
+		// Joern graphson export creates a directory.
+		// Prefer single export.json; fall back to separate ~1/~2 files.
+		exportFile := filepath.Join(path, "export.json")
+		if f, ferr := os.Stat(exportFile); ferr == nil && !f.IsDir() {
+			raw, err = os.ReadFile(exportFile)
+			if err != nil {
+				return nil, fmt.Errorf("read export.json: %w", err)
+			}
+		} else {
+			verticesFile := filepath.Join(path, "~1")
+			edgesFile := filepath.Join(path, "~2")
+			vd, verr := os.ReadFile(verticesFile)
+			if verr != nil {
+				return nil, fmt.Errorf("read vertices file: %w", verr)
+			}
+			ed, eerr := os.ReadFile(edgesFile)
+			if eerr != nil {
+				return nil, fmt.Errorf("read edges file: %w", eerr)
+			}
+			// Wrap into a single document format for uniform parsing.
+			raw = []byte(fmt.Sprintf(`{"vertices":%s,"edges":%s}`, vd, ed))
 		}
 	} else {
-		// Single file format (for testing)
-		raw, err := os.ReadFile(path)
+		raw, err = os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
-
-		var doc struct {
-			Vertices []struct {
-				ID         string         `json:"id"`
-				Label      string         `json:"label"`
-				Properties map[string]any `json:"properties"`
-			} `json:"vertices"`
-			Edges []struct {
-				From string `json:"inV"`
-				To   string `json:"outV"`
-				Label string `json:"label"`
-			} `json:"edges"`
-		}
-
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			return nil, fmt.Errorf("parse CPG: %w", err)
-		}
-
-		cpg := &CPG{
-			Vertices:          make([]*Vertex, 0, len(doc.Vertices)),
-			Edges:            make([]*Edge, 0, len(doc.Edges)),
-			methodsByFullname: make(map[string]*Vertex),
-			callsBySource:     make(map[string][]*Edge),
-			importsByFile:     make(map[string][]string),
-		}
-
-		for _, v := range doc.Vertices {
-			vertex := &Vertex{
-				ID:         v.ID,
-				Type:       v.Label,
-				Properties: v.Properties,
-			}
-			cpg.Vertices = append(cpg.Vertices, vertex)
-
-			if fullName, ok := v.Properties["FULL_NAME"].(string); ok && fullName != "" {
-				cpg.methodsByFullname[fullName] = vertex
-			}
-			if fullName, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && fullName != "" {
-				cpg.methodsByFullname[fullName] = vertex
-			}
-		}
-
-		for _, e := range doc.Edges {
-			edge := &Edge{
-				From:  e.To,
-				To:    e.From,
-				Label: e.Label,
-			}
-			cpg.Edges = append(cpg.Edges, edge)
-			cpg.callsBySource[edge.From] = append(cpg.callsBySource[edge.From], edge)
-		}
-
-		cpg.buildImportIndex()
-		return cpg, nil
 	}
 
-	// Parse Joern graphson export format (separate vertex and edge files)
-	var docVertices []struct {
-		ID         string         `json:"id"`
-		Label      string         `json:"label"`
-		Properties map[string]any `json:"properties"`
+	return parseCPG(raw)
+}
+
+// parseCPG handles both flat and TinkerPop GraphSON formats.
+func parseCPG(raw []byte) (*CPG, error) {
+	// Try TinkerPop GraphSON wrapper first ({"@type":"tinker:graph","@value":{...}})
+	var wrapper struct {
+		Value json.RawMessage `json:"@value"`
 	}
-	if err := json.Unmarshal(verticesData, &docVertices); err != nil {
-		return nil, fmt.Errorf("parse vertices: %w", err)
+	if err := json.Unmarshal(raw, &wrapper); err == nil && len(wrapper.Value) > 0 {
+		raw = wrapper.Value
 	}
 
-	var docEdges []struct {
-		From string `json:"inV"`
-		To   string `json:"outV"`
-		Label string `json:"label"`
+	var doc struct {
+		Vertices []json.RawMessage `json:"vertices"`
+		Edges    []json.RawMessage `json:"edges"`
 	}
-	if err := json.Unmarshal(edgesData, &docEdges); err != nil {
-		return nil, fmt.Errorf("parse edges: %w", err)
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("parse CPG: %w", err)
 	}
 
 	cpg := &CPG{
-		Vertices:          make([]*Vertex, 0, len(docVertices)),
-		Edges:            make([]*Edge, 0, len(docEdges)),
+		Vertices:          make([]*Vertex, 0, len(doc.Vertices)),
+		Edges:            make([]*Edge, 0, len(doc.Edges)),
 		methodsByFullname: make(map[string]*Vertex),
 		callsBySource:     make(map[string][]*Edge),
 		importsByFile:     make(map[string][]string),
 	}
 
-	for _, v := range docVertices {
-		vertex := &Vertex{
-			ID:         v.ID,
-			Type:       v.Label,
-			Properties: v.Properties,
-		}
+	for _, rawV := range doc.Vertices {
+		id, label, props := parseGraphSONVertex(rawV)
+		vertex := &Vertex{ID: id, Type: label, Properties: props}
 		cpg.Vertices = append(cpg.Vertices, vertex)
 
-		if fullName, ok := v.Properties["FULL_NAME"].(string); ok && fullName != "" {
+		if fullName, ok := props["FULL_NAME"].(string); ok && fullName != "" {
 			cpg.methodsByFullname[fullName] = vertex
 		}
-		if fullName, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && fullName != "" {
+		if fullName, ok := props["METHOD_FULL_NAME"].(string); ok && fullName != "" {
 			cpg.methodsByFullname[fullName] = vertex
 		}
 	}
 
-	for _, e := range docEdges {
-		edge := &Edge{
-			From:  e.To,
-			To:    e.From,
-			Label: e.Label,
-		}
+	for _, rawE := range doc.Edges {
+		from, to, label := parseGraphSONEdge(rawE)
+		edge := &Edge{From: to, To: from, Label: label}
 		cpg.Edges = append(cpg.Edges, edge)
 		cpg.callsBySource[edge.From] = append(cpg.callsBySource[edge.From], edge)
 	}
 
 	cpg.buildImportIndex()
 	return cpg, nil
+}
+
+// parseGraphSONVertex extracts id, label, and flattened properties from a
+// vertex that may be flat ({"id":"...","label":"...","properties":{...}}) or
+// TinkerPop GraphSON ({"@type":"g:Vertex","id":{"@type":"g:Int64","@value":...}, ...}).
+func parseGraphSONVertex(raw json.RawMessage) (id, label string, props map[string]any) {
+	props = make(map[string]any)
+
+	var v struct {
+		ID         any            `json:"id"`
+		Label      string         `json:"label"`
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "", "", props
+	}
+
+	id = fmt.Sprintf("%v", unwrapGraphSONValue(v.ID))
+	label = v.Label
+
+	for k, pv := range v.Properties {
+		props[k] = unwrapGraphSONProperty(pv)
+	}
+	return id, label, props
+}
+
+func parseGraphSONEdge(raw json.RawMessage) (from, to, label string) {
+	var e struct {
+		InV   any    `json:"inV"`
+		OutV  any    `json:"outV"`
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal(raw, &e); err != nil {
+		return "", "", ""
+	}
+	from = fmt.Sprintf("%v", unwrapGraphSONValue(e.InV))
+	to = fmt.Sprintf("%v", unwrapGraphSONValue(e.OutV))
+	return from, to, e.Label
+}
+
+// unwrapGraphSONValue extracts the actual value from TinkerPop {"@type":"...","@value":...}
+// wrappers. If the input is not wrapped, it returns the value unchanged.
+func unwrapGraphSONValue(v any) any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	if val, exists := m["@value"]; exists {
+		return unwrapGraphSONValue(val)
+	}
+	return v
+}
+
+// unwrapGraphSONProperty extracts the first value from a TinkerPop vertex property:
+// {"@type":"g:VertexProperty","@value":{"@type":"g:List","@value":[actualValue]}}
+func unwrapGraphSONProperty(v any) any {
+	unwrapped := unwrapGraphSONValue(v)
+
+	// After unwrapping @value, we may have a list — take the first element.
+	if slice, ok := unwrapped.([]any); ok && len(slice) > 0 {
+		return unwrapGraphSONValue(slice[0])
+	}
+	return unwrapped
 }
 
 func (cpg *CPG) buildImportIndex() {

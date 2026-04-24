@@ -107,7 +107,7 @@ func TestPropagator_Trace_NoPath(t *testing.T) {
 	}
 }
 
-func TestPropagator_cpgMatchesTarget(t *testing.T) {
+func TestPropagator_nameMatchesTarget(t *testing.T) {
 	tests := []struct {
 		name     string
 		cpg      string
@@ -125,9 +125,9 @@ func TestPropagator_cpgMatchesTarget(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cpg := &reachability.CPG{}
 			prop := NewPropagator(cpg, []Source{})
-			result := prop.cpgMatchesTarget(tt.cpg, tt.target)
+			result := prop.nameMatchesTarget(tt.cpg, tt.target)
 			if result != tt.expected {
-				t.Errorf("cpgMatchesTarget(%q, %q) = %v, want %v", tt.cpg, tt.target, result, tt.expected)
+				t.Errorf("nameMatchesTarget(%q, %q) = %v, want %v", tt.cpg, tt.target, result, tt.expected)
 			}
 		})
 	}
@@ -175,19 +175,16 @@ func TestPropagator_isSanitizer(t *testing.T) {
 func TestPropagator_SanitizerReducesConfidence(t *testing.T) {
 	cpg := &reachability.CPG{
 		Vertices: []*reachability.Vertex{
-			{
-				ID:         "v1",
-				Type:       "CALL",
-				Properties: map[string]any{"METHOD_FULL_NAME": "user_input_to_validate_to_vulnerable"},
-			},
-			{
-				ID:         "v2",
-				Type:       "CALL",
-				Properties: map[string]any{"NAME": "validateInput"},
-			},
+			{ID: "src", Type: "METHOD", Properties: map[string]any{"FULL_NAME": "user_input"}},
+			{ID: "v1", Type: "CALL", Properties: map[string]any{"METHOD_FULL_NAME": "user_input_to_validate_to_vulnerable"}},
+			{ID: "v2", Type: "CALL", Properties: map[string]any{"NAME": "validateInput", "METHOD_FULL_NAME": "validateInput"}},
+		},
+		Edges: []*reachability.Edge{
+			{From: "src", To: "v1", Label: "AST"},
+			{From: "v1", To: "v2", Label: "AST"},
 		},
 	}
-	sources := []Source{{Type: SourceHTTPParam, Name: "user_input", Symbol: "user_input"}}
+	sources := []Source{{Type: SourceHTTPParam, Name: "user_input", Symbol: "user_input", CPGID: "src"}}
 	prop := NewPropagator(cpg, sources)
 	result := prop.Trace("vulnerable")
 

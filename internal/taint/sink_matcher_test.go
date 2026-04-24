@@ -188,22 +188,18 @@ func TestMatcher_FindSinksInCPG_NoMatches(t *testing.T) {
 func TestMatcher_Match(t *testing.T) {
 	cpg := &reachability.CPG{
 		Vertices: []*reachability.Vertex{
-			{
-				ID:         "v1",
-				Type:       "CALL",
-				Properties: map[string]any{"METHOD_FULL_NAME": "user_input_calling_load_func"},
-			},
-			{
-				ID:         "v2",
-				Type:       "CALL",
-				Properties: map[string]any{"METHOD_FULL_NAME": "another_user_input_func"},
-			},
+			{ID: "src", Type: "METHOD", Properties: map[string]any{"FULL_NAME": "user_input"}},
+			{ID: "v1", Type: "CALL", Properties: map[string]any{"METHOD_FULL_NAME": "user_input_calling_load_func"}},
+			{ID: "v2", Type: "CALL", Properties: map[string]any{"METHOD_FULL_NAME": "another_user_input_func"}},
+		},
+		Edges: []*reachability.Edge{
+			{From: "src", To: "v1", Label: "AST"},
+			{From: "src", To: "v2", Label: "AST"},
 		},
 	}
-	sources := []Source{{Type: SourceHTTPParam, Name: "user_input", Symbol: "user_input"}}
+	sources := []Source{{Type: SourceHTTPParam, Name: "user_input", Symbol: "user_input", CPGID: "src"}}
 	match := NewMatcher(cpg, sources)
 
-	// Sink symbol "load" should match vertices containing "user_input" which also contain "load"
 	match.sinks = []Sink{
 		{Package: "torch", Symbol: "load", CVE: "CVE-2023-1234"},
 	}
@@ -225,22 +221,16 @@ func TestMatcher_Match(t *testing.T) {
 func TestMatcher_AnalyzeFinding_WithCPGSink(t *testing.T) {
 	cpg := &reachability.CPG{
 		Vertices: []*reachability.Vertex{
-			{
-				ID:         "v1",
-				Type:       "CALL",
-				Properties: map[string]any{"METHOD_FULL_NAME": "request_calling_load"},
-			},
-			{
-				ID:         "v2",
-				Type:       "CALL",
-				Properties: map[string]any{
-					"METHOD_FULL_NAME": "load",
-					"FILE_NAME":        "model.py",
-				},
-			},
+			{ID: "src", Type: "METHOD", Properties: map[string]any{"FULL_NAME": "request"}},
+			{ID: "v1", Type: "CALL", Properties: map[string]any{"METHOD_FULL_NAME": "request_calling_load"}},
+			{ID: "v2", Type: "CALL", Properties: map[string]any{"METHOD_FULL_NAME": "load", "FILE_NAME": "model.py"}},
+		},
+		Edges: []*reachability.Edge{
+			{From: "src", To: "v1", Label: "AST"},
+			{From: "v1", To: "v2", Label: "AST"},
 		},
 	}
-	sources := []Source{{Type: SourceHTTPParam, Name: "request.Param", Symbol: "request"}}
+	sources := []Source{{Type: SourceHTTPParam, Name: "request.Param", Symbol: "request", CPGID: "src"}}
 	match := NewMatcher(cpg, sources)
 
 	// Use a finding with description that will extract "load" as the symbol

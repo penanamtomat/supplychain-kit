@@ -26,7 +26,8 @@ type Source struct {
 	Name     string
 	File     string
 	Line     int
-	Symbol   string // Variable name or function parameter
+	Symbol   string // Method full name used as BFS start identifier
+	CPGID    string // CPG vertex ID for edge-based traversal
 	Priority int    // Higher = more likely to be exploitable
 }
 
@@ -66,9 +67,16 @@ func (d *Detector) Detect() []Source {
 func (d *Detector) detectHTTPHandlers() []Source {
 	var sources []Source
 
+	// Build a map of METHOD -> CALL vertices via AST containment
+	methodCalls := d.findCallsInMethods()
+
 	for _, v := range d.cpg.Vertices {
-		name, hasName := v.Properties["FULL_NAME"].(string)
-		if !hasName {
+		if v.Type != "METHOD" {
+			continue
+		}
+
+		name, _ := v.Properties["FULL_NAME"].(string)
+		if name == "" {
 			name, _ = v.Properties["METHOD_FULL_NAME"].(string)
 		}
 		if name == "" {
@@ -76,41 +84,133 @@ func (d *Detector) detectHTTPHandlers() []Source {
 		}
 
 		lower := strings.ToLower(name)
-		// Common HTTP handler patterns across frameworks
 		isHandler :=
 			strings.Contains(lower, "handle") ||
 			strings.Contains(lower, "servehttp") ||
 			strings.Contains(lower, ".handler") ||
+			strings.Contains(lower, "handler.") ||
 			strings.Contains(lower, "controller.") ||
-			strings.Contains(lower, "endpoint.") ||
-			strings.HasSuffix(lower, ".get") ||
-			strings.HasSuffix(lower, ".post") ||
-			strings.HasSuffix(lower, ".put") ||
-			strings.HasSuffix(lower, ".delete") ||
-			strings.HasSuffix(lower, ".patch")
+			strings.Contains(lower, "endpoint.")
 
-		if isHandler {
-			priority := 10
-			// Framework-specific patterns
-			if strings.Contains(lower, "gin") || strings.Contains(lower, "echo") {
-				priority = 20
-			}
-			if strings.Contains(lower, "net/http") {
-				priority = 15
-			}
+		if !isHandler {
+			continue
+		}
 
-			sources = append(sources, Source{
-				Type:     SourceHTTPParam,
-				Name:     name,
-				File:     d.vertexFile(v),
-				Line:     d.vertexLine(v),
-				Symbol:   d.extractParams(name),
-				Priority: priority,
-			})
+		priority := 10
+		if strings.Contains(lower, "gin") || strings.Contains(lower, "echo") {
+			priority = 20
+		}
+		if strings.Contains(lower, "net/http") {
+			priority = 15
+		}
+
+		sources = append(sources, Source{
+			Type:     SourceHTTPParam,
+			Name:     name,
+			File:     d.vertexFile(v),
+			Line:     d.vertexLine(v),
+			Symbol:   name,
+			CPGID:    v.ID,
+			Priority: priority,
+		})
+
+		// Also add framework-specific input CALL vertices as sources
+		// e.g., gin.Context.Query, gin.Context.BindJSON, gin.Context.Param
+		if calls, ok := methodCalls[v.ID]; ok {
+			for _, call := range calls {
+				callName := d.vertexName(call)
+				if d.isInputSource(callName) {
+					sources = append(sources, Source{
+						Type:     SourceHTTPParam,
+						Name:     callName,
+						File:     d.vertexFile(call),
+						Line:     d.vertexLine(call),
+						Symbol:   callName,
+						CPGID:    call.ID,
+						Priority: priority + 5,
+					})
+				}
+			}
 		}
 	}
 
 	return sources
+}
+
+func (d *Detector) isInputSource(name string) bool {
+	if name == "" {
+		return false
+	}
+	lower := strings.ToLower(name)
+	return strings.Contains(lower, "context.query") ||
+		strings.Contains(lower, "context.param") ||
+		strings.Contains(lower, "context.bindjson") ||
+		strings.Contains(lower, "context.bind") ||
+		strings.Contains(lower, "context.formvalue") ||
+		strings.Contains(lower, "context.postform") ||
+		strings.Contains(lower, "context.getheader") ||
+		strings.Contains(lower, "context.getrawdata") ||
+		strings.Contains(lower, "request.formvalue") ||
+		strings.Contains(lower, "request.header") ||
+		strings.Contains(lower, "request.body") ||
+		strings.Contains(lower, "request.url") ||
+		strings.Contains(lower, "request.parseform")
+}
+
+func (d *Detector) findCallsInMethods() map[string][]*reachability.Vertex {
+	// Build parent->child mapping from CPG edges
+	children := make(map[string][]*reachability.Vertex)
+	for _, e := range d.cpg.Edges {
+		if e.Label == "AST" || e.Label == "CONTAINS" {
+			for _, v := range d.cpg.Vertices {
+				if v.ID == e.To {
+					children[e.From] = append(children[e.From], v)
+					break
+				}
+			}
+		}
+	}
+
+	// For each METHOD, find CALL children
+	result := make(map[string][]*reachability.Vertex)
+	for _, v := range d.cpg.Vertices {
+		if v.Type != "METHOD" {
+			continue
+		}
+		var calls []*reachability.Vertex
+		d.collectCalls(v.ID, children, make(map[string]bool), &calls)
+		if len(calls) > 0 {
+			result[v.ID] = calls
+		}
+	}
+	return result
+}
+
+func (d *Detector) collectCalls(nodeID string, children map[string][]*reachability.Vertex, visited map[string]bool, calls *[]*reachability.Vertex) {
+	if visited[nodeID] {
+		return
+	}
+	visited[nodeID] = true
+
+	for _, child := range children[nodeID] {
+		if child.Type == "CALL" {
+			*calls = append(*calls, child)
+		}
+		d.collectCalls(child.ID, children, visited, calls)
+	}
+}
+
+func (d *Detector) vertexName(v *reachability.Vertex) string {
+	if name, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && name != "" {
+		return name
+	}
+	if name, ok := v.Properties["FULL_NAME"].(string); ok && name != "" {
+		return name
+	}
+	if name, ok := v.Properties["NAME"].(string); ok && name != "" {
+		return name
+	}
+	return ""
 }
 
 func (d *Detector) detectEnvReads() []Source {
@@ -235,6 +335,9 @@ func (d *Detector) detectCLIArgs() []Source {
 }
 
 func (d *Detector) vertexFile(v *reachability.Vertex) string {
+	if file, ok := v.Properties["FILENAME"].(string); ok {
+		return file
+	}
 	if file, ok := v.Properties["FILE_NAME"].(string); ok {
 		return file
 	}

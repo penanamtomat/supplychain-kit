@@ -1,6 +1,3 @@
-// Package taint implements dependency-aware SAST by tracing user-controlled input
-// through codebase to determine which CVEs are truly exploitable.
-// This bridges SCA (Grype/Trivy) and SAST (Semgrep/Joern) findings.
 package taint
 
 import (
@@ -9,44 +6,92 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/reachability"
 )
 
-// SanitizerType represents a validation/sanitization function.
 type SanitizerType string
 
 const (
-	SanitValidate     SanitizerType = "validate"
-	SanitEscape       SanitizerType = "escape"
-	SanitFilter       SanitizerType = "filter"
-	SanitTypeCheck    SanitizerType = "type_check"
-	SanitNormalize     SanitizerType = "normalize"
+	SanitValidate   SanitizerType = "validate"
+	SanitEscape     SanitizerType = "escape"
+	SanitFilter     SanitizerType = "filter"
+	SanitTypeCheck  SanitizerType = "type_check"
+	SanitNormalize  SanitizerType = "normalize"
 )
 
-// Sanitizer represents a function that cleans/validates tainted data.
 type Sanitizer struct {
-	Type   SanitizerType
-	Name   string
-	File   string
-	Line   int
-	Efficacy float64 // 0.0 = completely ineffective, 1.0 = perfect
+	Type      SanitizerType
+	Name      string
+	File      string
+	Line      int
+	Efficacy  float64
 }
 
-// Propagator traces taint from sources through call graph.
 type Propagator struct {
-	cpg          *reachability.CPG
-	sources      []Source
+	cpg         *reachability.CPG
+	sources     []Source
 	sanitizers  []Sanitizer
+	// adjacency lists built from CPG edges
+	callTargets  map[string][]string // CALL vertex ID -> list of target METHOD vertex IDs
+	contains     map[string][]string // parent vertex ID -> child vertex IDs (AST/CONTAINS)
+	reachingDef map[string][]string // def vertex ID -> use vertex IDs (REACHING_DEF)
+	argument    map[string][]string // argument vertex ID -> parameter vertex IDs
+	vertexNames map[string]string   // vertex ID -> METHOD_FULL_NAME or FULL_NAME
+	vertexTypes map[string]string   // vertex ID -> label
 }
 
-// NewPropagator creates a new taint propagator.
 func NewPropagator(cpg *reachability.CPG, sources []Source) *Propagator {
 	p := &Propagator{
-		cpg:     cpg,
-		sources:  sources,
+		cpg:         cpg,
+		sources:     sources,
+		callTargets: make(map[string][]string),
+		contains:    make(map[string][]string),
+		reachingDef: make(map[string][]string),
+		argument:    make(map[string][]string),
+		vertexNames: make(map[string]string),
+		vertexTypes: make(map[string]string),
 	}
-	p.detectSanitizers()
+	if cpg != nil {
+		p.buildGraph()
+		p.detectSanitizers()
+	}
 	return p
 }
 
-// detectSanitizers finds validation/escape functions in CPG.
+func (p *Propagator) buildGraph() {
+	for _, v := range p.cpg.Vertices {
+		name := p.extractName(v)
+		p.vertexNames[v.ID] = name
+		p.vertexTypes[v.ID] = v.Type
+	}
+
+	for _, e := range p.cpg.Edges {
+		switch e.Label {
+		case "CALL":
+			p.callTargets[e.From] = append(p.callTargets[e.From], e.To)
+		case "AST", "CONTAINS":
+			p.contains[e.From] = append(p.contains[e.From], e.To)
+		case "REACHING_DEF":
+			p.reachingDef[e.From] = append(p.reachingDef[e.From], e.To)
+		case "ARGUMENT":
+			p.argument[e.From] = append(p.argument[e.From], e.To)
+		}
+	}
+}
+
+func (p *Propagator) extractName(v *reachability.Vertex) string {
+	if name, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && name != "" {
+		return name
+	}
+	if name, ok := v.Properties["FULL_NAME"].(string); ok && name != "" {
+		return name
+	}
+	if name, ok := v.Properties["NAME"].(string); ok && name != "" {
+		return name
+	}
+	if code, ok := v.Properties["CODE"].(string); ok && code != "" {
+		return code
+	}
+	return ""
+}
+
 func (p *Propagator) detectSanitizers() {
 	if p.cpg == nil {
 		return
@@ -75,91 +120,50 @@ func (p *Propagator) detectSanitizers() {
 func (p *Propagator) isSanitizer(name string) *Sanitizer {
 	lower := strings.ToLower(name)
 
-	// Common validation patterns
 	if strings.Contains(lower, "validate") || strings.Contains(lower, "verify") || strings.Contains(lower, "check") {
-		return &Sanitizer{
-			Type:     SanitValidate,
-			Name:     name,
-			File:     "",
-			Line:     0,
-			Efficacy: 0.8,
-		}
+		return &Sanitizer{Type: SanitValidate, Name: name, Efficacy: 0.8}
 	}
-
-	// Common escape patterns
 	if strings.Contains(lower, "escape") || strings.Contains(lower, "encode") || strings.Contains(lower, "sanitize") {
-		return &Sanitizer{
-			Type:     SanitEscape,
-			Name:     name,
-			File:     "",
-			Line:     0,
-			Efficacy: 0.7,
-		}
+		return &Sanitizer{Type: SanitEscape, Name: name, Efficacy: 0.7}
 	}
-
-	// Common filter patterns
 	if strings.Contains(lower, "filter") || strings.Contains(lower, "allowlist") || strings.Contains(lower, "whitelist") {
-		return &Sanitizer{
-			Type:     SanitFilter,
-			Name:     name,
-			File:     "",
-			Line:     0,
-			Efficacy: 0.6,
-		}
+		return &Sanitizer{Type: SanitFilter, Name: name, Efficacy: 0.6}
 	}
-
-	// Type checks
 	if strings.Contains(lower, "type") || strings.Contains(lower, "cast") || strings.Contains(lower, "assert") {
-		return &Sanitizer{
-			Type:     SanitTypeCheck,
-			Name:     name,
-			File:     "",
-			Line:     0,
-			Efficacy: 0.9,
-		}
+		return &Sanitizer{Type: SanitTypeCheck, Name: name, Efficacy: 0.9}
 	}
 
 	return nil
 }
 
-// TaintNode represents a node in taint flow graph.
 type TaintNode struct {
 	ID         string
 	Source     *Source
-	Sanitized   bool
+	Sanitized  bool
 	Confidence float64
 	Path       []string
 }
 
-// Trace propagates taint from all sources through call graph.
 func (p *Propagator) Trace(targetSymbol string) TaintResult {
 	if p.cpg == nil || len(p.sources) == 0 {
-		return TaintResult{
-			Exploitable: false,
-			Confidence:  0.0,
-			Path:       []string{},
-		}
+		return TaintResult{Exploitable: false, Confidence: 0.0}
 	}
 
 	var bestResult TaintResult
-
-	// Try to find path from each source to target
 	for _, source := range p.sources {
 		result := p.traceFromSource(&source, targetSymbol)
 		if result.Exploitable && result.Confidence > bestResult.Confidence {
 			bestResult = result
 		}
 	}
-
 	return bestResult
 }
 
-// TaintResult represents outcome of taint trace.
 type TaintResult struct {
-	Exploitable bool
-	Confidence float64
-	Path       []string
-	SanitizerFound bool
+	Exploitable     bool
+	Confidence      float64
+	Path            []string
+	SanitizerFound  bool
 }
 
 func (p *Propagator) traceFromSource(source *Source, targetSymbol string) TaintResult {
@@ -167,15 +171,48 @@ func (p *Propagator) traceFromSource(source *Source, targetSymbol string) TaintR
 		return TaintResult{Exploitable: false, Confidence: 0.0}
 	}
 
-	// BFS from source through call graph
+	lowerTarget := strings.ToLower(targetSymbol)
+
+	// Find all target vertex IDs in CPG
+	var targetIDs []string
+	for id, name := range p.vertexNames {
+		if p.nameMatchesTarget(name, lowerTarget) {
+			targetIDs = append(targetIDs, id)
+		}
+	}
+
+	// BFS from source vertex through graph edges
+	startID := source.CPGID
+	if startID == "" {
+		// Fallback: find vertex by name
+		for id, name := range p.vertexNames {
+			if name == source.Symbol || strings.Contains(strings.ToLower(name), strings.ToLower(source.Symbol)) {
+				startID = id
+				break
+			}
+		}
+	}
+	if startID == "" {
+		return TaintResult{Exploitable: false, Confidence: 0.0}
+	}
+
+	targetSet := make(map[string]bool)
+	for _, id := range targetIDs {
+		targetSet[id] = true
+	}
+
 	visited := make(map[string]bool)
+	startName := source.Symbol
+	if startName == "" {
+		startName = p.vertexNames[startID]
+	}
 	queue := []TaintNode{
 		{
-			ID:         source.Symbol,
+			ID:         startID,
 			Source:     source,
-			Sanitized:   false,
+			Sanitized:  false,
 			Confidence: 1.0,
-			Path:       []string{source.Symbol},
+			Path:       []string{startName},
 		},
 	}
 
@@ -183,13 +220,13 @@ func (p *Propagator) traceFromSource(source *Source, targetSymbol string) TaintR
 		current := queue[0]
 		queue = queue[1:]
 
-		// Check if we reached the target
-		if strings.Contains(current.ID, targetSymbol) || p.cpgMatchesTarget(current.ID, targetSymbol) {
+		// Check if current node matches target
+		if targetSet[current.ID] {
 			return TaintResult{
 				Exploitable:     true,
 				Confidence:      current.Confidence,
-				Path:           current.Path,
-				SanitizerFound: current.Sanitized,
+				Path:            current.Path,
+				SanitizerFound:  current.Sanitized,
 			}
 		}
 
@@ -198,38 +235,38 @@ func (p *Propagator) traceFromSource(source *Source, targetSymbol string) TaintR
 		}
 		visited[current.ID] = true
 
-		// Find next nodes (function calls)
-		nextNodes := p.findNextCalls(current.ID)
-		for _, next := range nextNodes {
-			// Extract method name from vertex
-			methodName := p.extractMethodName(next)
-			if methodName == "" {
+		// Expand: find neighbors through CPG edges
+		nextNodes := p.expandNode(current.ID)
+		for _, nextID := range nextNodes {
+			if visited[nextID] {
 				continue
 			}
 
-			sanitizer := p.findSanitizerForCall(next)
-			confidence := current.Confidence
+			name := p.vertexNames[nextID]
+			if name == "" {
+				continue
+			}
 
-			// Reduce confidence when crossing sanitizer
+			sanitizer := p.findSanitizerForVertex(nextID)
+			confidence := current.Confidence
 			if sanitizer != nil {
 				confidence *= sanitizer.Efficacy
-				visited[methodName] = true // Mark sanitized paths as visited
 			}
 
 			newPath := make([]string, len(current.Path)+1)
 			copy(newPath, current.Path)
-			newPath[len(current.Path)] = methodName
+			newPath[len(current.Path)] = name
 
 			queue = append(queue, TaintNode{
-				ID:         methodName,
+				ID:         nextID,
 				Source:     current.Source,
-				Sanitized:   current.Sanitized || sanitizer != nil,
+				Sanitized:  current.Sanitized || sanitizer != nil,
 				Confidence: confidence,
 				Path:       newPath,
 			})
 		}
 
-		// Limit search depth to avoid infinite loops
+		// Limit search depth
 		if len(current.Path) > 20 {
 			break
 		}
@@ -238,75 +275,47 @@ func (p *Propagator) traceFromSource(source *Source, targetSymbol string) TaintR
 	return TaintResult{Exploitable: false, Confidence: 0.0}
 }
 
-func (p *Propagator) extractMethodName(v *reachability.Vertex) string {
-	if name, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && name != "" {
-		return name
+func (p *Propagator) expandNode(nodeID string) []string {
+	var neighbors []string
+
+	// Follow all edge types outward
+	for _, targets := range []map[string][]string{p.callTargets, p.contains, p.reachingDef, p.argument} {
+		if targets, ok := targets[nodeID]; ok {
+			neighbors = append(neighbors, targets...)
+		}
 	}
-	if name, ok := v.Properties["FULL_NAME"].(string); ok && name != "" {
-		return name
+
+	// Also do reverse lookup: if any vertex has an edge TO this node, follow back
+	// This helps with data flow (REACHING_DEF goes from def to use, but taint flows use -> def)
+	for fromID, targets := range p.reachingDef {
+		for _, t := range targets {
+			if t == nodeID {
+				neighbors = append(neighbors, fromID)
+			}
+		}
 	}
-	return ""
+
+	return neighbors
 }
 
-func (p *Propagator) findNextCalls(symbolID string) []*reachability.Vertex {
-	var next []*reachability.Vertex
-
-	// Find calls that contain this symbol
-	for _, v := range p.cpg.Vertices {
-		if v.Type != "CALL" && v.Type != "IDENTIFIER" {
-			continue
-		}
-
-		name, ok := v.Properties["FULL_NAME"].(string)
-		if !ok {
-			name, _ = v.Properties["METHOD_FULL_NAME"].(string)
-		}
-		if name == "" {
-			continue
-		}
-
-		if strings.Contains(name, symbolID) {
-			next = append(next, v)
-		}
-	}
-
-	return next
-}
-
-func (p *Propagator) cpgMatchesTarget(cpgSymbol, targetSymbol string) bool {
-	// Fuzzy matching for symbol names
-	lowerCPG := strings.ToLower(cpgSymbol)
-	lowerTarget := strings.ToLower(targetSymbol)
-
-	// Direct match
-	if lowerCPG == lowerTarget {
+func (p *Propagator) nameMatchesTarget(name, lowerTarget string) bool {
+	lower := strings.ToLower(name)
+	if lower == lowerTarget {
 		return true
 	}
-
-	// Contains match (e.g., "torch.load" matches "load")
-	return strings.Contains(lowerCPG, lowerTarget) ||
-		strings.Contains(lowerTarget, lowerCPG)
+	return strings.Contains(lower, lowerTarget) || strings.Contains(lowerTarget, lower)
 }
 
-func (p *Propagator) findSanitizerForCall(vertex *reachability.Vertex) *Sanitizer {
-	if vertex.Type != "CALL" {
-		return nil
-	}
-
-	name, ok := vertex.Properties["NAME"].(string)
-	if !ok {
-		name, _ = vertex.Properties["METHOD_FULL_NAME"].(string)
-	}
+func (p *Propagator) findSanitizerForVertex(vertexID string) *Sanitizer {
+	name := p.vertexNames[vertexID]
 	if name == "" {
 		return nil
 	}
-
 	lower := strings.ToLower(name)
 	for _, san := range p.sanitizers {
 		if strings.Contains(lower, strings.ToLower(san.Name)) {
 			return &san
 		}
 	}
-
 	return nil
 }

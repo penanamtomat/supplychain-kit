@@ -9,9 +9,10 @@
 # What this script does:
 #   1. Verify prerequisites  (Go, git, curl)
 #   2. Install scanner tools (syft, grype, trivy, osv-scanner, gitleaks, semgrep, joern)
-#   3. Build supplychain-kit binary from source
-#   4. Install supplychain-kit into a directory on PATH
-#   5. Print PATH setup instructions when needed
+#   3. Install pandoc        (optional, required for --format docx report generation)
+#   4. Build supplychain-kit binary from source
+#   5. Install supplychain-kit into a directory on PATH
+#   6. Print PATH setup instructions when needed
 #
 # Usage:
 #   bash install.sh                        # full install (always fetches latest versions)
@@ -48,6 +49,7 @@ SKIP_SEMGREP=false
 SKIP_TRIVY=false
 SKIP_OSV=false
 SKIP_JOERN=false
+SKIP_PANDOC=false
 INSTALL_DIR="${INSTALL_DIR:-}"
 
 for arg in "$@"; do
@@ -56,6 +58,7 @@ for arg in "$@"; do
     --no-trivy)     SKIP_TRIVY=true ;;
     --no-osv)       SKIP_OSV=true ;;
     --no-joern)     SKIP_JOERN=true ;;
+    --no-pandoc)    SKIP_PANDOC=true ;;
     --prefix)       shift; INSTALL_DIR="$1" ;;
     --prefix=*)     INSTALL_DIR="${arg#--prefix=}" ;;
     --help|-h)
@@ -67,6 +70,7 @@ Options:
   --no-trivy          Skip trivy installation
   --no-osv            Skip osv-scanner installation
   --no-joern          Skip joern installation (large ~500MB download, requires Java)
+  --no-pandoc         Skip pandoc installation (only needed for --format docx reports)
   --prefix <dir>      Install supplychain-kit and scanner tools to <dir>
                       (default: ~/.local/bin on Linux/Windows,
                                 /usr/local/bin on macOS if writable)
@@ -576,6 +580,73 @@ else
   fi
 fi
 
+# ── pandoc ────────────────────────────────────────────────────────────────────
+# Pandoc is used by `supplychain-kit report --format docx` to convert Markdown
+# to Word documents. Optional — text/markdown reports work without it.
+if $SKIP_PANDOC; then
+  warn "Skipping pandoc (--no-pandoc) — DOCX report generation will be unavailable"
+elif check pandoc; then
+  info "pandoc already installed ($(pandoc --version | head -1))"
+else
+  echo "  Installing pandoc (latest stable)..."
+  PANDOC_OK=false
+
+  if [ "$OS" = "darwin" ] && check brew; then
+    brew install pandoc --quiet 2>&1 | tail -1 && PANDOC_OK=true
+
+  elif [ "$OS" = "linux" ]; then
+    if check apt-get; then
+      # Debian/Ubuntu — install from official .deb release (apt version is often outdated).
+      PANDOC_VERSION="$(latest_release jgm/pandoc)"
+      PANDOC_DEB="pandoc-${PANDOC_VERSION}-1-amd64.deb"
+      PANDOC_URL="https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/${PANDOC_DEB}"
+      echo "    Downloading ${PANDOC_DEB}..."
+      if curl -fsSL --retry 3 "$PANDOC_URL" -o "/tmp/${PANDOC_DEB}"; then
+        dpkg -i "/tmp/${PANDOC_DEB}" >/dev/null 2>&1 && PANDOC_OK=true
+        rm -f "/tmp/${PANDOC_DEB}"
+      fi
+      # Fallback: apt (older version but always works).
+      if ! $PANDOC_OK; then
+        apt-get install -y pandoc >/dev/null 2>&1 && PANDOC_OK=true
+      fi
+    elif check dnf; then
+      dnf install -y pandoc >/dev/null 2>&1 && PANDOC_OK=true
+    elif check yum; then
+      yum install -y pandoc >/dev/null 2>&1 && PANDOC_OK=true
+    elif check apk; then
+      apk add --no-cache pandoc >/dev/null 2>&1 && PANDOC_OK=true
+    fi
+
+    # Universal Linux fallback: download static binary tarball.
+    if ! $PANDOC_OK; then
+      PANDOC_VERSION="${PANDOC_VERSION:-$(latest_release jgm/pandoc)}"
+      PANDOC_TAR="pandoc-${PANDOC_VERSION}-linux-amd64.tar.gz"
+      [ "$ARCH" = "arm64" ] && PANDOC_TAR="pandoc-${PANDOC_VERSION}-linux-arm64.tar.gz"
+      PANDOC_URL="https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/${PANDOC_TAR}"
+      echo "    Trying static binary: ${PANDOC_TAR}..."
+      if download_extract "$PANDOC_URL" "pandoc" "${INSTALL_DIR}/pandoc"; then
+        PANDOC_OK=true
+      fi
+    fi
+
+  elif [ "$OS" = "windows" ]; then
+    PANDOC_VERSION="$(latest_release jgm/pandoc)"
+    PANDOC_ZIP="pandoc-${PANDOC_VERSION}-windows-x86_64.zip"
+    PANDOC_URL="https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/${PANDOC_ZIP}"
+    if download_extract "$PANDOC_URL" "pandoc" "${INSTALL_DIR}/pandoc${EXT}"; then
+      PANDOC_OK=true
+    fi
+  fi
+
+  if $PANDOC_OK; then
+    info "pandoc installed ($(pandoc --version 2>/dev/null | head -1))"
+  else
+    warn "pandoc installation failed — DOCX report generation will be unavailable"
+    warn "Install manually: https://pandoc.org/installing.html"
+    warn "Markdown reports (--format markdown) work without pandoc."
+  fi
+fi
+
 # ── step 3: build supplychain-kit from source ──────────────────────────────────
 section "Step 3/4 — Building supplychain-kit from source"
 
@@ -604,7 +675,7 @@ echo -e "${BOLD}${GREEN}  supplychain-kit installed successfully!   ${RESET}"
 echo -e "${BOLD}${GREEN}════════════════════════════════════════════${RESET}"
 echo ""
 echo -e "${BOLD}Scanner tools:${RESET}"
-for bin in syft grype trivy osv-scanner gitleaks semgrep joern-parse joern-export; do
+for bin in syft grype trivy osv-scanner gitleaks semgrep joern-parse joern-export pandoc; do
   if check "$bin" || [ -f "${INSTALL_DIR}/${bin}" ] || [ -f "${INSTALL_DIR}/${bin}.exe" ]; then
     echo -e "  ${GREEN}✓${RESET} ${bin}"
   else

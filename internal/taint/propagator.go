@@ -35,6 +35,7 @@ type Propagator struct {
 	argument    map[string][]string // argument vertex ID -> parameter vertex IDs
 	vertexNames map[string]string   // vertex ID -> METHOD_FULL_NAME or FULL_NAME
 	vertexTypes map[string]string   // vertex ID -> label
+	registry    *SanitizerRegistry  // ecosystem-specific sanitizer catalog
 }
 
 func NewPropagator(cpg *reachability.CPG, sources []Source) *Propagator {
@@ -47,6 +48,7 @@ func NewPropagator(cpg *reachability.CPG, sources []Source) *Propagator {
 		argument:    make(map[string][]string),
 		vertexNames: make(map[string]string),
 		vertexTypes: make(map[string]string),
+		registry:    NewSanitizerRegistry(),
 	}
 	if cpg != nil {
 		p.buildGraph()
@@ -118,6 +120,15 @@ func (p *Propagator) detectSanitizers() {
 }
 
 func (p *Propagator) isSanitizer(name string) *Sanitizer {
+	// Prefer ecosystem-specific registry match (higher-fidelity efficacy scores).
+	if p.registry != nil {
+		if san := p.registry.Lookup(name); san != nil {
+			hit := *san
+			hit.Name = name
+			return &hit
+		}
+	}
+
 	lower := strings.ToLower(name)
 
 	if strings.Contains(lower, "validate") || strings.Contains(lower, "verify") || strings.Contains(lower, "check") {

@@ -472,3 +472,10 @@ _Pick any unchecked item, open an issue, and submit a PR to `dev`._
 	- [ ] Graceful degradation: jika Claude Code tidak tersedia, fallback ke template-based
 
 	**Catatan:** Fitur ini opsional untuk improvement masa depan. Default tetap gunakan template-based remediation.
+
+**Status v0.8:** SELESAI dengan catatan:
+- 76/474 item (~16%) dikerjakan sebelum selesai
+- Improvement session ini membantu menyelesaikan beberapa task
+- Sisa ~84% item untuk implementasi MCP Server dan improvement lainnya
+
+---

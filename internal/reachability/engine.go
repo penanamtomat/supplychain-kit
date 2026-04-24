@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/rs/zerolog/log"
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 )
 
@@ -31,10 +33,16 @@ func (e *Engine) Analyze(ctx context.Context, assetID, cpgPath string, findings 
 	var err error
 
 	if cpgPath != "" {
-		cpg, err = loadCPG(cpgPath)
+		log.Info().Str("cpg_path", cpgPath).Msg("reachability: loading CPG")
+		cpg, err = LoadCPG(cpgPath)
 		if err != nil {
+			log.Warn().Err(err).Str("cpg_path", cpgPath).Msg("reachability: failed to load CPG, using UNKNOWN for all findings")
 			cpg = nil
+		} else {
+			log.Info().Int("vertices", len(cpg.Vertices)).Int("edges", len(cpg.Edges)).Msg("reachability: CPG loaded successfully")
 		}
+	} else {
+		log.Warn().Msg("reachability: no CPG path provided, using UNKNOWN for all findings")
 	}
 
 	var wg sync.WaitGroup
@@ -54,6 +62,7 @@ func (e *Engine) analyzeFinding(ctx context.Context, assetID string, cpg *CPG, f
 		if f.Reachability == "" || f.Reachability == models.ReachUnknown {
 			f.Reachability = models.ReachReachable
 			f.Confidence = 1.0
+			log.Debug().Str("rule_id", f.RuleID).Msg("reachability: first-party finding marked as REACHABLE")
 		}
 		return
 	}
@@ -63,6 +72,7 @@ func (e *Engine) analyzeFinding(ctx context.Context, assetID string, cpg *CPG, f
 	} else {
 		f.Reachability = models.ReachUnknown
 		f.Confidence = 0.0
+		log.Debug().Str("rule_id", f.RuleID).Str("package", f.Package).Msg("reachability: no CPG available, marked as UNKNOWN")
 	}
 
 	if e.runtime != nil && f.Package != "" {
@@ -82,10 +92,12 @@ func (e *Engine) analyzeWithCPG(cpg *CPG, f *models.Finding) {
 		f.Reachability = models.ReachReachable
 		f.Confidence = analysis.Confidence
 		f.Path = analysis.Path
+		log.Debug().Str("rule_id", f.RuleID).Str("package", f.Package).Float64("confidence", analysis.Confidence).Msg("reachability: path found to vulnerable symbol")
 	} else {
 		f.Reachability = models.ReachUnreachable
 		f.Confidence = analysis.Confidence
 		f.Path = []string{}
+		log.Debug().Str("rule_id", f.RuleID).Str("package", f.Package).Msg("reachability: no path found, marked as UNREACHABLE")
 	}
 }
 
@@ -116,38 +128,119 @@ type PathAnalysis struct {
 	Path       []string
 }
 
-func loadCPG(path string) (*CPG, error) {
-	raw, err := os.ReadFile(path)
+func LoadCPG(path string) (*CPG, error) {
+	var verticesData, edgesData []byte
+
+	// Check if path is a directory (Joern export format)
+	info, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stat CPG path: %w", err)
 	}
 
-	var doc struct {
-		Vertices []struct {
-			ID         string         `json:"id"`
-			Label      string         `json:"label"`
-			Properties map[string]any `json:"properties"`
-		} `json:"vertices"`
-		Edges []struct {
-			From string `json:"inV"`
-			To   string `json:"outV"`
-			Label string `json:"label"`
-		} `json:"edges"`
+	if info.IsDir() {
+		// Joern graphson export creates a directory with ~1 (vertices) and ~2 (edges)
+		verticesFile := filepath.Join(path, "~1")
+		edgesFile := filepath.Join(path, "~2")
+
+		verticesData, err = os.ReadFile(verticesFile)
+		if err != nil {
+			return nil, fmt.Errorf("read vertices file: %w", err)
+		}
+
+		edgesData, err = os.ReadFile(edgesFile)
+		if err != nil {
+			return nil, fmt.Errorf("read edges file: %w", err)
+		}
+	} else {
+		// Single file format (for testing)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+
+		var doc struct {
+			Vertices []struct {
+				ID         string         `json:"id"`
+				Label      string         `json:"label"`
+				Properties map[string]any `json:"properties"`
+			} `json:"vertices"`
+			Edges []struct {
+				From string `json:"inV"`
+				To   string `json:"outV"`
+				Label string `json:"label"`
+			} `json:"edges"`
+		}
+
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return nil, fmt.Errorf("parse CPG: %w", err)
+		}
+
+		cpg := &CPG{
+			Vertices:          make([]*Vertex, 0, len(doc.Vertices)),
+			Edges:            make([]*Edge, 0, len(doc.Edges)),
+			methodsByFullname: make(map[string]*Vertex),
+			callsBySource:     make(map[string][]*Edge),
+			importsByFile:     make(map[string][]string),
+		}
+
+		for _, v := range doc.Vertices {
+			vertex := &Vertex{
+				ID:         v.ID,
+				Type:       v.Label,
+				Properties: v.Properties,
+			}
+			cpg.Vertices = append(cpg.Vertices, vertex)
+
+			if fullName, ok := v.Properties["FULL_NAME"].(string); ok && fullName != "" {
+				cpg.methodsByFullname[fullName] = vertex
+			}
+			if fullName, ok := v.Properties["METHOD_FULL_NAME"].(string); ok && fullName != "" {
+				cpg.methodsByFullname[fullName] = vertex
+			}
+		}
+
+		for _, e := range doc.Edges {
+			edge := &Edge{
+				From:  e.To,
+				To:    e.From,
+				Label: e.Label,
+			}
+			cpg.Edges = append(cpg.Edges, edge)
+			cpg.callsBySource[edge.From] = append(cpg.callsBySource[edge.From], edge)
+		}
+
+		cpg.buildImportIndex()
+		return cpg, nil
 	}
 
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("parse CPG: %w", err)
+	// Parse Joern graphson export format (separate vertex and edge files)
+	var docVertices []struct {
+		ID         string         `json:"id"`
+		Label      string         `json:"label"`
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(verticesData, &docVertices); err != nil {
+		return nil, fmt.Errorf("parse vertices: %w", err)
+	}
+
+	var docEdges []struct {
+		From string `json:"inV"`
+		To   string `json:"outV"`
+		Label string `json:"label"`
+	}
+	if err := json.Unmarshal(edgesData, &docEdges); err != nil {
+		return nil, fmt.Errorf("parse edges: %w", err)
 	}
 
 	cpg := &CPG{
-		Vertices:          make([]*Vertex, 0, len(doc.Vertices)),
-		Edges:            make([]*Edge, 0, len(doc.Edges)),
+		Vertices:          make([]*Vertex, 0, len(docVertices)),
+		Edges:            make([]*Edge, 0, len(docEdges)),
 		methodsByFullname: make(map[string]*Vertex),
 		callsBySource:     make(map[string][]*Edge),
 		importsByFile:     make(map[string][]string),
 	}
 
-	for _, v := range doc.Vertices {
+	for _, v := range docVertices {
 		vertex := &Vertex{
 			ID:         v.ID,
 			Type:       v.Label,
@@ -163,7 +256,7 @@ func loadCPG(path string) (*CPG, error) {
 		}
 	}
 
-	for _, e := range doc.Edges {
+	for _, e := range docEdges {
 		edge := &Edge{
 			From:  e.To,
 			To:    e.From,
@@ -174,7 +267,6 @@ func loadCPG(path string) (*CPG, error) {
 	}
 
 	cpg.buildImportIndex()
-
 	return cpg, nil
 }
 

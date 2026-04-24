@@ -15,6 +15,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/rs/zerolog/log"
 
 	"github.com/penanamtomat/supplychain-kit/internal/claudeai"
 	"github.com/penanamtomat/supplychain-kit/internal/config"
@@ -261,11 +262,17 @@ func handleScanRepository(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	cpgPath := ""
 	if artifacts != nil {
 		cpgPath = artifacts[joern.ArtifactCPGPath]
+		if cpgPath != "" {
+			log.Info().Str("cpg_path", cpgPath).Msg("scan: CPG artifact found from Joern")
+		} else {
+			log.Warn().Msg("scan: no CPG artifact found — Joern may have failed or not been included in scan mode")
+		}
 	}
 	reach := reachability.New(nil)
 	var reachErr string
 	if err := reach.Analyze(ctx, asset.ID, cpgPath, merged); err != nil {
 		reachErr = err.Error()
+		log.Warn().Err(err).Msg("scan: reachability analysis failed")
 	}
 
 	scorer := scoring.Scorer{}
@@ -543,9 +550,11 @@ func buildRegistry(mode, semgrepConfig string) *scanner.Registry {
 	}
 	switch mode {
 	case "sca":
-		return scanner.NewRegistry(syftadapter.New(), grype.New(), trivyadapter.New(), osvscanner.New())
+		// Include Joern for reachability analysis of SCA findings
+		return scanner.NewRegistry(syftadapter.New(), grype.New(), trivyadapter.New(), osvscanner.New(), joern.New())
 	case "sast":
-		return scanner.NewRegistry(sg, gitleaks.New())
+		// Include Joern for reachability analysis of SAST findings
+		return scanner.NewRegistry(sg, gitleaks.New(), joern.New())
 	default:
 		return scanner.NewRegistry(
 			syftadapter.New(), grype.New(), trivyadapter.New(), osvscanner.New(),
@@ -677,7 +686,8 @@ func convertToDOCX(mdPath, docxPath string) error {
 	if _, err := exec.LookPath("pandoc"); err != nil {
 		return fmt.Errorf("pandoc not found in PATH — install pandoc to generate DOCX output")
 	}
-	cmd := exec.Command("pandoc", mdPath, "-o", docxPath, "--toc", "--highlight-style=tango")
+	// Use markdown-yaml_metadata_block to avoid parsing '---' separators as YAML delimiters
+	cmd := exec.Command("pandoc", "-f", "markdown-yaml_metadata_block", mdPath, "-o", docxPath, "--toc", "--highlight-style=tango")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("pandoc: %w\n%s", err, strings.TrimSpace(string(out)))

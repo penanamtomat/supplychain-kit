@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
 )
@@ -46,20 +48,24 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 		return out, err
 	}
 
+	log.Info().Str("scanner", "joern").Str("repo", req.CheckoutDir).Msg("Joern: starting CPG generation")
+
 	cpgBin := filepath.Join(req.CheckoutDir, ".aspm", "cpg.bin")
 	cpgExport := filepath.Join(req.CheckoutDir, ".aspm", "cpg-export")
 	if err := os.MkdirAll(filepath.Dir(cpgBin), 0o755); err != nil {
-		return out, err
+		return out, fmt.Errorf("create .aspm dir: %w", err)
 	}
 	// joern-export fails if the output directory already exists (e.g. re-runs).
 	_ = os.RemoveAll(cpgExport)
 
+	log.Debug().Str("scanner", "joern").Str("output", cpgBin).Msg("joern-parse: running parse phase")
 	parse := exec.CommandContext(ctx, a.parseBinary, req.CheckoutDir, "--output", cpgBin)
 	parse.Stderr = os.Stderr
 	if err := parse.Run(); err != nil {
 		return out, fmt.Errorf("joern-parse: %w", err)
 	}
 
+	log.Debug().Str("scanner", "joern").Str("output", cpgExport).Msg("joern-export: running export phase")
 	export := exec.CommandContext(ctx, a.exportBinary, cpgBin, "--repr", "all", "--format", "graphson", "--out", cpgExport)
 	export.Stderr = os.Stderr
 	if err := export.Run(); err != nil {
@@ -67,5 +73,6 @@ func (a *Adapter) Scan(ctx context.Context, req scanner.Request) (scanner.Result
 	}
 
 	out.Artifacts[scanner.ArtifactCPGPath] = cpgExport
+	log.Info().Str("scanner", "joern").Str("cpg_path", cpgExport).Msg("Joern: CPG generated successfully")
 	return out, nil
 }

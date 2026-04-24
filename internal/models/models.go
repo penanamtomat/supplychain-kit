@@ -95,10 +95,11 @@ const (
 type Reachability string
 
 const (
-	ReachUnknown      Reachability = "unknown"
-	ReachUnreachable  Reachability = "unreachable"
-	ReachReachable    Reachability = "reachable"
-	ReachConfirmed    Reachability = "runtime_confirmed"
+	ReachUnknown         Reachability = "unknown"
+	ReachUnreachable     Reachability = "unreachable"
+	ReachReachable       Reachability = "reachable"
+	ReachConfirmed       Reachability = "runtime_confirmed"
+	ReachConfirmedExploit Reachability = "confirmed_exploitable"
 )
 
 // VEXStatus aligns with CSAF 2.0 (Profile 5) status values.

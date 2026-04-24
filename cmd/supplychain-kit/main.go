@@ -37,6 +37,7 @@ import (
 	syftadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/syft"
 	trivyadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/trivy"
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
+	"github.com/penanamtomat/supplychain-kit/internal/taint"
 )
 
 // version is set at build time: go build -ldflags "-X main.version=$(git describe --tags --always)"
@@ -127,6 +128,24 @@ Target:
 			reach := reachability.New(nil)
 			if err := reach.Analyze(cmd.Context(), asset.ID, cpgPath, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
+			}
+
+			// Run taint analysis if CPG is available
+			if cpgPath != "" {
+				cpg, err := reachability.LoadCPG(cpgPath)
+				if err == nil && cpg != nil {
+					taintEngine := taint.NewEngine(cpg)
+					taintEngine.Analyze(merged)
+					exploitableCount := 0
+					for _, f := range merged {
+						if f.Reachability == models.ReachConfirmedExploit {
+							exploitableCount++
+						}
+					}
+					if exploitableCount > 0 {
+						fmt.Fprintf(os.Stderr, "  Taint analysis: %d confirmed exploitable path(s)\n", exploitableCount)
+					}
+				}
 			}
 
 			scorer := scoring.Scorer{}
@@ -231,8 +250,8 @@ func writeTargetReports(dir string, findings []*models.Finding, repo, mode strin
 // writeTableTo writes a human-readable table to any io.Writer.
 func writeTableTo(w *os.File, findings []*models.Finding) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tREACHABLE\tRISK_SCORE")
-	fmt.Fprintln(tw, "--------\t----------\t-------\t---\t----\t---------\t----------")
+	fmt.Fprintln(tw, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tREACHABLE\tRISK_SCORE\tTAINT PATH")
+	fmt.Fprintln(tw, "--------\t----------\t-------\t---\t----\t---------\t----------\t----------")
 	for _, f := range findings {
 		pkg := f.Package
 		if pkg == "" {
@@ -252,9 +271,23 @@ func writeTableTo(w *os.File, findings []*models.Finding) {
 		if reach == "" {
 			reach = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\n",
+
+		// Format taint path for exploitable findings
+		taintPath := "-"
+		if f.Reachability == models.ReachConfirmedExploit && len(f.Path) > 0 {
+			// Show shortened path: source → ... → sink
+			if len(f.Path) <= 3 {
+				taintPath = strings.Join(f.Path, " → ")
+			} else {
+				taintPath = fmt.Sprintf("%s → ... → %s", f.Path[0], f.Path[len(f.Path)-1])
+			}
+		} else if f.Reachability == models.ReachConfirmedExploit {
+			taintPath = "exploitable (no path details)"
+		}
+
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%s\n",
 			strings.ToUpper(string(f.Severity)),
-			f.RuleID, pkg, fix, loc, reach, f.RiskScore,
+			f.RuleID, pkg, fix, loc, reach, f.RiskScore, taintPath,
 		)
 	}
 	tw.Flush()
@@ -344,8 +377,8 @@ func printSummarySection(label string, findings []*models.Finding) {
 // printTable writes a human-readable table of findings to stdout.
 func printTable(findings []*models.Finding) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tREACHABLE\tRISK_SCORE")
-	fmt.Fprintln(w, "--------\t----------\t-------\t---\t----\t---------\t----------")
+	fmt.Fprintln(w, "SEVERITY\tRULE / CVE\tPACKAGE\tFIX\tFILE\tREACHABLE\tRISK_SCORE\tTAINT PATH")
+	fmt.Fprintln(w, "--------\t----------\t-------\t---\t----\t---------\t----------\t----------")
 	for _, f := range findings {
 		pkg := f.Package
 		if pkg == "" {
@@ -365,9 +398,23 @@ func printTable(findings []*models.Finding) error {
 		if reach == "" {
 			reach = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\n",
+
+		// Format taint path for exploitable findings
+		taintPath := "-"
+		if f.Reachability == models.ReachConfirmedExploit && len(f.Path) > 0 {
+			// Show shortened path: source → ... → sink
+			if len(f.Path) <= 3 {
+				taintPath = strings.Join(f.Path, " → ")
+			} else {
+				taintPath = fmt.Sprintf("%s → ... → %s", f.Path[0], f.Path[len(f.Path)-1])
+			}
+		} else if f.Reachability == models.ReachConfirmedExploit {
+			taintPath = "exploitable (no path details)"
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%s\n",
 			strings.ToUpper(string(f.Severity)),
-			f.RuleID, pkg, fix, loc, reach, f.RiskScore,
+			f.RuleID, pkg, fix, loc, reach, f.RiskScore, taintPath,
 		)
 	}
 	return w.Flush()
@@ -735,6 +782,24 @@ Examples:
 			reach := reachability.New(nil)
 			if err := reach.Analyze(cmd.Context(), asset.ID, cpgPath, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
+			}
+
+			// Run taint analysis if CPG is available
+			if cpgPath != "" {
+				cpg, err := reachability.LoadCPG(cpgPath)
+				if err == nil && cpg != nil {
+					taintEngine := taint.NewEngine(cpg)
+					taintEngine.Analyze(merged)
+					exploitableCount := 0
+					for _, f := range merged {
+						if f.Reachability == models.ReachConfirmedExploit {
+							exploitableCount++
+						}
+					}
+					if exploitableCount > 0 {
+						fmt.Fprintf(os.Stderr, "  Taint analysis: %d confirmed exploitable path(s)\n", exploitableCount)
+					}
+				}
 			}
 
 			scorer := scoring.Scorer{}

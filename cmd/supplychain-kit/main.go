@@ -26,10 +26,13 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 	"github.com/penanamtomat/supplychain-kit/internal/quality"
 	"github.com/penanamtomat/supplychain-kit/internal/reachability"
+	pkgremediation "github.com/penanamtomat/supplychain-kit/internal/remediation/pkg"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/gitleaks"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/grype"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/joern"
+	licensescan "github.com/penanamtomat/supplychain-kit/internal/license"
+	depgraph "github.com/penanamtomat/supplychain-kit/internal/graph"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/osvscanner"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/semgrep"
 	syftadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/syft"
@@ -47,6 +50,8 @@ func main() {
 		Short:   "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
 		Version: version,
 	}
+	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), reportCmd(), installHooksCmd())
+	root.AddCommand(remediateCmd(), licenseCmd(), graphCmd())
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -1668,5 +1673,274 @@ and take effect automatically when Claude Code loads the project.`,
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing pre-commit hook")
+	return cmd
+}
+
+// ── remediate command ─────────────────────────────────────────────────────────
+
+func remediateCmd() *cobra.Command {
+	var (
+		findingsFile string
+		engagement   string
+		topN         int
+		format       string
+		quickFix     bool
+	)
+	cmd := &cobra.Command{
+		Use:   "remediate",
+		Short: "Package-level remediation guidance grouped by package",
+		Long: `Generate package-level remediation guidance with grouped vulnerabilities.
+
+Groups findings by package and provides single upgrade commands for each package.
+Prioritizes packages based on risk score and vulnerability severity.
+
+Examples:
+  supplychain-kit remediate --findings results/myapp/findings.json
+  supplychain-kit remediate --findings results/myapp/findings.json --quick-fix`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if findingsFile == "" {
+				return fmt.Errorf("--findings required")
+			}
+
+			findings, err := readFindings(findingsFile)
+			if err != nil {
+				return fmt.Errorf("read findings: %w", err)
+			}
+
+			if len(findings) == 0 {
+				fmt.Fprintln(os.Stderr, "  No findings to remediate.")
+				return nil
+			}
+
+			grouper := pkgremediation.NewGrouper(findings)
+
+			if quickFix {
+				commands := grouper.GetQuickFixCommands()
+				fmt.Fprintln(os.Stderr, "  Quick Fix Commands:")
+				for _, cmd := range commands {
+					fmt.Fprintln(os.Stderr, cmd)
+				}
+				return nil
+			}
+
+			report := grouper.GenerateRemediationReport()
+
+			if engagement != "" {
+				remediationDir := filepath.Join("results", engagement, "remediation")
+				_ = os.MkdirAll(remediationDir, 0o755)
+
+				remediationMD := filepath.Join(remediationDir, "package-remediation.md")
+				if err := os.WriteFile(remediationMD, []byte(report), 0o644); err != nil {
+					return fmt.Errorf("write remediation report: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "  Remediation report: %s\n", remediationMD)
+			} else {
+				fmt.Println(report)
+			}
+
+			impact := grouper.GetUpgradeImpact()
+			fmt.Fprintf(os.Stderr, "\n── Upgrade Impact ───────────────────────────\n")
+			fmt.Fprintf(os.Stderr, "  Packages to upgrade: %d\n", impact["packages_to_upgrade"])
+			fmt.Fprintf(os.Stderr, "  Vulnerabilities fixed: %d\n", impact["vulnerabilities_fixed"])
+			if critical, ok := impact["critical_vulnerabilities_fixed"].(int); ok {
+				fmt.Fprintf(os.Stderr, "  Critical vulns fixed: %d\n", critical)
+			}
+
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&findingsFile, "findings", "", "path to findings JSON file")
+	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement name (saves to results/<engagement>/)")
+	cmd.Flags().IntVar(&topN, "top", 0, "show top N packages (0 = all)")
+	cmd.Flags().StringVar(&format, "format", "markdown", "output format")
+	cmd.Flags().BoolVar(&quickFix, "quick-fix", false, "show only quick fix commands")
+	_ = cmd.MarkFlagRequired("findings")
+	return cmd
+}
+
+// ── license command ────────────────────────────────────────────────────────────
+
+func licenseCmd() *cobra.Command {
+	var (
+		engagement string
+		policyFile string
+		format     string
+	)
+	cmd := &cobra.Command{
+		Use:   "license",
+		Short: "Scan package licenses for compliance",
+		Long: `Scan dependencies for license compliance issues.
+
+Detects licenses from package metadata and evaluates them against policies.
+Supports npm (package.json), Python (requirements.txt, setup.py), Go (go.mod),
+and other ecosystem-specific license files.
+
+Examples:
+  supplychain-kit license --engagement myapp
+  supplychain-kit license --engagement myapp --policy my-license-policy.yaml`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if engagement == "" {
+				return fmt.Errorf("--engagement required")
+			}
+
+			engDir := filepath.Join("results", engagement)
+
+			// Load policy
+			var policy *licensescan.Policy
+			if policyFile != "" {
+				// TODO: Load policy from YAML file
+				policy = licensescan.DefaultPolicy()
+			} else {
+				policy = licensescan.DefaultPolicy()
+			}
+
+			scanner := licensescan.NewScanner(policy)
+
+			// Scan for license files
+			licenseFiles, err := licensescan.FindLicenseFiles(engDir)
+			if err != nil {
+				return fmt.Errorf("find license files: %w", err)
+			}
+
+			var packages []*licensescan.PackageLicense
+			for _, lf := range licenseFiles {
+				pkgDir := filepath.Dir(lf)
+				pl, err := scanner.ScanPackageDir(pkgDir)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  [warn] Failed to scan %s: %v\n", pkgDir, err)
+					continue
+				}
+				packages = append(packages, pl)
+			}
+
+			report := scanner.GenerateReport(packages)
+
+			licenseMD := filepath.Join(engDir, "license-report.md")
+			if err := os.WriteFile(licenseMD, []byte(report), 0o644); err != nil {
+				return fmt.Errorf("write license report: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "  License report: %s\n", licenseMD)
+			fmt.Println(report)
+
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement name")
+	cmd.Flags().StringVar(&policyFile, "policy", "", "license policy YAML file")
+	cmd.Flags().StringVar(&format, "format", "markdown", "output format")
+	_ = cmd.MarkFlagRequired("engagement")
+	return cmd
+}
+
+// ── graph command ─────────────────────────────────────────────────────────────
+
+func graphCmd() *cobra.Command {
+	var (
+		engagement string
+		format     string
+		outputFile string
+		critical   bool
+	)
+	cmd := &cobra.Command{
+		Use:   "graph",
+		Short: "Generate dependency graph visualization",
+		Long: `Generate dependency graph visualization showing vulnerable packages.
+
+Supports multiple output formats:
+  - dot: Graphviz DOT format (can be rendered with dot -Tpng graph.dot -o graph.png)
+  - mermaid: Mermaid.js format (can be rendered in GitHub, Notion, etc.)
+  - ascii: ASCII text representation
+
+Examples:
+  supplychain-kit graph --engagement myapp --format dot
+  supplychain-kit graph --engagement myapp --format mermaid --output graph.mmd
+  supplychain-kit graph --engagement myapp --critical`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if engagement == "" {
+				return fmt.Errorf("--engagement required")
+			}
+
+			findingsFile := filepath.Join("results", engagement, "findings.json")
+			findings, err := readFindings(findingsFile)
+			if err != nil {
+				return fmt.Errorf("read findings: %w", err)
+			}
+
+			graph := depgraph.NewGraph()
+
+			// Build graph from findings
+			processedPackages := make(map[string]bool)
+			for _, f := range findings {
+				pkgID := f.Package + "@" + f.Version
+				if !processedPackages[pkgID] {
+					graph.AddNode(pkgID, f.Package, f.Version)
+					processedPackages[pkgID] = true
+				}
+
+				// Update vulnerability info
+				switch f.Severity {
+				case models.SeverityCritical:
+					graph.UpdateVulnerabilities(pkgID, 1, 0, 0)
+				case models.SeverityHigh:
+					graph.UpdateVulnerabilities(pkgID, 0, 1, 0)
+				}
+				graph.UpdateRiskScore(pkgID, f.RiskScore)
+
+				// Add edges (simplified - in real implementation would parse dependency tree)
+				if f.FilePath != "" {
+					// This is a simplified approach
+					rootID := engagement + "-root"
+					graph.AddNode(rootID, engagement, "root")
+					graph.AddEdge(rootID, pkgID, "direct")
+				}
+			}
+
+			var output string
+			switch format {
+			case "dot":
+				output = graph.ToDot()
+			case "mermaid":
+				output = graph.ToMermaid()
+			case "ascii":
+				output = graph.GenerateASCII()
+			default:
+				return fmt.Errorf("unsupported format: %s (use: dot, mermaid, ascii)", format)
+			}
+
+			if outputFile != "" {
+				if err := os.WriteFile(outputFile, []byte(output), 0o644); err != nil {
+					return fmt.Errorf("write output: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "  Graph saved: %s\n", outputFile)
+			} else {
+				fmt.Println(output)
+			}
+
+			if critical {
+				path := graph.GetCriticalPath(engagement + "-root")
+				if len(path) > 0 {
+					fmt.Fprintf(os.Stderr, "\n── Critical Path ───────────────────────────\n")
+					fmt.Fprintf(os.Stderr, "  Path to most critical vulnerability:\n")
+					for i, node := range path {
+						fmt.Fprintf(os.Stderr, "    %d. %s\n", i+1, node)
+					}
+				}
+			}
+
+			stats := graph.GetStatistics()
+			fmt.Fprintf(os.Stderr, "\n── Graph Statistics ────────────────────────\n")
+			fmt.Fprintf(os.Stderr, "  Total packages: %d\n", stats["total_packages"])
+			fmt.Fprintf(os.Stderr, "  Vulnerable packages: %d\n", stats["vulnerable_packages"])
+			fmt.Fprintf(os.Stderr, "  Total vulnerabilities: %d\n", stats["total_vulnerabilities"])
+
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&engagement, "engagement", "", "engagement name")
+	cmd.Flags().StringVar(&format, "format", "ascii", "output format: dot, mermaid, ascii")
+	cmd.Flags().StringVar(&outputFile, "output", "", "output file path")
+	cmd.Flags().BoolVar(&critical, "critical", false, "show critical path")
+	_ = cmd.MarkFlagRequired("engagement")
 	return cmd
 }

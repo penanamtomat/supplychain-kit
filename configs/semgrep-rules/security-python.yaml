@@ -1,0 +1,169 @@
+rules:
+  - id: python.security.sql.injection.raw-query
+    patterns:
+      - pattern: $CONN.execute($QUERY)
+      - metavariable-regex:
+          metavariable: $QUERY
+          regex: .*f['"`].*\{.*\}.*['"`].*|.*\+.*%s.*
+    message: |
+      SQL query built with f-string or format can lead to SQL injection.
+      Use parameterized queries with placeholders.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-89"
+      owasp: "A03:2021 - Injection"
+
+  - id: python.security.command.injection.os-system-user-input
+    patterns:
+      - pattern: os.system($CMD)
+      - pattern: subprocess.call($CMD, shell=True)
+      - pattern: subprocess.Popen($CMD, shell=True)
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: \+.*|f['"`].*\{.*\}.*['"`].*
+    message: |
+      User input in shell command can lead to command injection.
+      Use subprocess without shell=True or use shlex.quote().
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-78"
+      owasp: "A03:2021 - Injection"
+
+  - id: python.security.ssrf.unsafe-url-request
+    patterns:
+      - pattern-regex: (requests\.get|urllib\.request\.urlopen)\s*\(\s*[^)]*f['"`].*\{.*\}.*['"`][^)]*\)
+    message: |
+      User-controlled URL in HTTP request can lead to SSRF.
+      Validate and whitelist allowed URLs.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-918"
+      owasp: "A10:2021 - Server-Side Request Forgery"
+
+  - id: python.security.crypto.weak-hash
+    patterns:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)
+      - pattern: hashlib.sha224(...)
+    message: |
+      Weak hash algorithm used. Use SHA-256 or stronger.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-327"
+      owasp: "A02:2021 - Cryptographic Failures"
+
+  - id: python.security.insecure.tempfile
+    patterns:
+      - pattern: tempfile.mktemp(...)
+    message: |
+      tempfile.mktemp() is insecure and can lead to race conditions.
+      Use tempfile.mkstemp() instead.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-377"
+      owasp: "A01:2021 - Broken Access Control"
+
+  - id: python.security.pickled-data.from-untrusted
+    patterns:
+      - pattern: pickle.loads($DATA)
+      - pattern: pickle.Unpickler($F).load(...)
+      - metavariable-regex:
+          metavariable: $DATA
+          regex: req\.|request\.|user\.
+    message: |
+      Unpickling untrusted data can lead to arbitrary code execution.
+      Use JSON or a safe serialization format.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-502"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+
+  - id: python.security.yaml.load-unsafe
+    patterns:
+      - pattern: yaml.load(...)
+    message: |
+      yaml.load() is unsafe. Use yaml.safe_load() instead.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-502"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+
+  - id: python.security.hardcoded-secret
+    patterns:
+      - pattern-regex: (password|secret|api_key|apikey|private_key)\s*[=:]\s*['"`][^'"`]{8,}['"`]
+    message: |
+      Hardcoded credential detected. Use environment variables.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-798"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+
+  - id: python.security.insecure.random
+    patterns:
+      - pattern: random.random(...)
+      - pattern: random.randint(...)
+    message: |
+      random module is not cryptographically secure.
+      Use secrets module or os.urandom() instead.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-338"
+      owasp: "A02:2021 - Cryptographic Failures"
+
+  - id: python.security.path-traversal.user-input
+    patterns:
+      - pattern-regex: (open|read|write)\s*\(\s*[^)]*f['"`].*\{.*\}.*['"`][^)]*\)
+    message: |
+      User input in file operation can lead to path traversal.
+      Validate and sanitize file paths.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-22"
+      owasp: "A01:2021 - Broken Access Control"
+
+  - id: python.security.flask.unsafe-render
+    patterns:
+      - pattern: render_template_string($TEMPLATE, $VARS)
+      - metavariable-regex:
+          metavariable: $TEMPLATE
+          regex: f['"`].*\{.*\}.*['"`].*
+    message: |
+      Rendering template with user input can lead to SSTI.
+      Use safe rendering methods or Jinja2 autoescape.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: security
+      cwe: "CWE-94"
+      owasp: "A03:2021 - Injection"
+
+  - id: python.security.django.debug.true
+    patterns:
+      - pattern: DEBUG = True
+    message: |
+      Django debug mode enabled in production. This exposes sensitive information.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: security
+      owasp: "A05:2021 - Security Misconfiguration"

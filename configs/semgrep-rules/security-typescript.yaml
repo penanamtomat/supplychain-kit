@@ -1,0 +1,220 @@
+rules:
+  - id: typescript.react.security.xss.dangerouslysetinnerhtml-user-input
+    patterns:
+      - pattern-regex: dangerouslySetInnerHTML\s*=\s*\{\s*[^}]+[^}]\s*\}
+    message: |
+      dangerouslySetInnerHTML with non-constant input can lead to XSS.
+      If user input must be rendered, sanitize it first using DOMPurify.
+    severity: WARNING
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      technology:
+        - react
+      cwe: "CWE-79"
+      owasp: "A03:2021 - Injection"
+
+  - id: typescript.react.security.xss.documentwrite-user-input
+    patterns:
+      - pattern: document.write($X)
+      - metavariable-regex:
+          metavariable: $X
+          regex: \+.*
+    message: |
+      document.write with concatenation can lead to XSS. Use safe rendering methods instead.
+    severity: WARNING
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-79"
+      owasp: "A03:2021 - Injection"
+
+  - id: typescript.express.security.injection.response-redirect-user-input
+    patterns:
+      - pattern: res.redirect($X)
+      - metavariable-regex:
+          metavariable: $X
+          regex: \+.*|req\.params\.|req\.query\.|req\.body\.
+    message: |
+      Unsanitized user input in redirect can lead to open redirect vulnerabilities.
+      Validate URLs before redirecting.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-601"
+      owasp: "A01:2021 - Broken Access Control"
+
+  - id: typescript.security.sqli.raw-query-params
+    patterns:
+      - pattern-regex: \.query\(['"`][^'"`]*\$\{[^}]+\}[^'"`]*['"`]\)
+    message: |
+      SQL query with template literal injection can lead to SQL injection.
+      Use parameterized queries instead.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-89"
+      owasp: "A03:2021 - Injection"
+
+  - id: typescript.security.sqli.raw-concat-query
+    patterns:
+      - pattern: $CONN.query($QUERY)
+      - metavariable-regex:
+          metavariable: $QUERY
+          regex: \+.*|`.*\$\{.*\}.*`
+    message: |
+      SQL query built with concatenation can lead to SQL injection.
+      Use parameterized queries with placeholders.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-89"
+      owasp: "A03:2021 - Injection"
+
+  - id: typescript.security.command-injection.child-process-exec-user-input
+    patterns:
+      - pattern: child_process.exec($CMD)
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: \+.*|`.*\$\{.*\}.*|req\.|user\.
+    message: |
+      User input in child_process.exec can lead to command injection.
+      Use child_process.execFile with array arguments instead.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-78"
+      owasp: "A03:2021 - Injection"
+
+  - id: typescript.security.ssrf.unsafe-url-fetch-user-input
+    patterns:
+      - pattern-regex: (fetch|axios|http\.request)\s*\(\s*[^)]*\$\{[^}]+\}[^)]*\)
+    message: |
+      User-controlled URL in fetch can lead to Server-Side Request Forgery (SSRF).
+      Validate and whitelist allowed URLs.
+    severity: WARNING
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-918"
+      owasp: "A10:2021 - Server-Side Request Forgery"
+
+  - id: typescript.security.crypto.weak-hash
+    patterns:
+      - pattern-regex: (createHash|pbkdf2)\s*\(\s*['"`]md5['"`]\)
+      - pattern-regex: (createHash|pbkdf2)\s*\(\s*['"`]sha1['"`]\)
+    message: |
+      Weak hash algorithm (MD5, SHA1) used. Use SHA-256 or stronger.
+    severity: WARNING
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-327"
+      owasp: "A02:2021 - Cryptographic Failures"
+
+  - id: typescript.security.crypto.weak-cipher
+    patterns:
+      - pattern-regex: (createCipher|createDecipher)\s*\s*\(\s*['"`](aes-128-ecb|des-ecb|rc4)['"`]\)
+    message: |
+      Weak or insecure cipher used. Use AES-256-GCM or similar.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-327"
+      owasp: "A02:2021 - Cryptographic Failures"
+
+  - id: typescript.security.auth.hardcoded-secret
+    patterns:
+      - pattern-regex: (password|secret|api_key|apikey|private_key)\s*[=:]\s*['"`][^'"`]{8,}['"`]
+    message: |
+      Hardcoded credential detected. Use environment variables or secret management.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-798"
+      owasp: "A07:2021 - Identification and Authentication Failures"
+
+  - id: typescript.security.insecure.random
+    patterns:
+      - pattern: Math.random()
+    message: |
+      Math.random() is not cryptographically secure.
+      Use crypto.randomBytes() or crypto.randomUUID() instead.
+    severity: WARNING
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-338"
+      owasp: "A02:2021 - Cryptographic Failures"
+
+  - id: typescript.security.path-traversal.user-input
+    patterns:
+      - pattern-regex: (fs\.readFile|fs\.writeFile|fs\.unlink)\s*\(\s*[^)]*\$\{[^}]+\}[^)]*\)
+    message: |
+      User input in file system operation can lead to path traversal.
+      Validate and sanitize file paths.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-22"
+      owasp: "A01:2021 - Broken Access Control"
+
+  - id: typescript.security.insecure.deserialization
+    patterns:
+      - pattern: eval($X)
+      - pattern: new Function($X)
+      - pattern-regex: JSON\.parse\s*\(\s*req\.body\)
+    message: |
+      eval() or parsing untrusted JSON can lead to code injection or DoS.
+      Validate and sanitize input first.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-502"
+      owasp: "A08:2021 - Software and Data Integrity Failures"
+
+  - id: typescript.nextjs.security.dynamic-import-user-input
+    patterns:
+      - pattern-regex: import\s*\(\s*`.*\$\{[^}]+\}.*`\s*\)
+    message: |
+      Dynamic import with user input can lead to code injection.
+      Whitelist allowed module paths.
+    severity: ERROR
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-94"
+      owasp: "A03:2021 - Injection"
+
+  - id: typescript.security.insecure-cookie
+    patterns:
+      - pattern-regex: res\.cookie\s*\([^,)]+,[^,)]+,\s*\{[^}]*httpOnly\s*:\s*false
+    message: |
+      Cookie set without httpOnly flag can be accessed by JavaScript (XSS risk).
+      Set httpOnly: true for session cookies.
+    severity: WARNING
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      cwe: "CWE-1004"
+      owasp: "A05:2021 - Security Misconfiguration"
+
+  - id: typescript.security.insecure-headers
+    patterns:
+      - pattern-regex: res\.setHeader\s*\(\s*['"`]X-Powered-By['"`]\s*,\s*['"`]Express['"`]\s*\)
+    message: |
+      Exposing framework version via X-Powered-By header aids attackers.
+      Remove this header or use helmet middleware.
+    severity: INFO
+    languages: [typescript, javascript]
+    metadata:
+      category: security
+      owasp: "A05:2021 - Security Misconfiguration"

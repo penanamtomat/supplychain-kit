@@ -1,192 +1,252 @@
 # Architecture — supplychain-kit
 
-This document describes the technical architecture that implements the PRD ([docs/Product Requirements Document (PRD)_ Integrated Application Security Posture Management (ASPM) Platform.md](docs/Product%20Requirements%20Document%20%28PRD%29_%20Integrated%20Application%20Security%20Posture%20Management%20%28ASPM%29%20Platform.md)). It is the authoritative reference for component boundaries, data flow, and extension points.
+This document describes the technical architecture of supplychain-kit v1.0 — a single-binary CLI tool for supply chain security scanning. It is the authoritative reference for component boundaries, data flow, and extension points.
 
 ## 1. Design principles
 
-1. **Scan-once, monitor-always.** SBOMs are generated on commit and persisted; CVE matching is a database join, not a re-scan.
-2. **Reachability over severity.** A `Critical` CVE in unreachable code is downgraded; an `Info` finding on a hot path is escalated. The risk score expresses this.
-3. **Adapter-first scanners.** Every scanner is a thin adapter behind a Go interface, so swapping Semgrep for CodeQL is a config change, not a refactor.
+1. **Single binary, zero infrastructure.** No database, no Redis, no Docker. The tool runs anywhere a Go binary can execute.
+2. **Reachability over severity.** A `Critical` CVE in unreachable code is downgraded; a reachable `Medium` finding is escalated. The risk score expresses this.
+3. **Adapter-first scanners.** Every scanner is a thin adapter behind a Go interface. Swapping Semgrep for CodeQL is a config change, not a refactor.
 4. **Deterministic gates.** Quality gates take a normalized finding set as input and produce a binary pass/fail with a deterministic explanation.
-5. **Human-in-the-loop remediation.** Remediation agents propose, never apply. Production-critical branches require Security Champion approval.
+5. **CLI-first, MCP-optional.** All features work via CLI commands. The MCP server exposes the same pipeline as tools for Claude Code automation.
 
 ## 2. System components
 
 ```
-                  ┌─────────────────────┐
-                  │  Git Providers      │
-                  │  (GitHub / GitLab / │
-                  │   Bitbucket)        │
-                  └──────────┬──────────┘
-                             │ webhook (push, PR)
-                             ▼
-                  ┌─────────────────────┐
-                  │  Ingestion Layer    │
-                  │  internal/ingestion │
-                  └──────────┬──────────┘
-                             │ scan job (Redis)
-                             ▼
-┌──────────────┐   ┌────────────────────┐   ┌──────────────────┐
-│  CLI / CI    │──►│  Scanner Worker    │──►│  Scanner Adapters│
-│  supplychain-kit    │   │  cmd/aspm-scanner  │   │  syft / grype /  │
-└──────────────┘   └──────────┬─────────┘   │  semgrep / joern │
-                              │             │  / gitleaks      │
-                              │             └────────┬─────────┘
-                              │                      │
-                              ▼                      ▼
-                  ┌────────────────────────────────────────┐
-                  │  Correlation & Normalization           │
-                  │  internal/correlation                  │
-                  │   - de-dup across scanners             │
-                  │   - DefectDojo-shape common schema     │
-                  └──────────────────┬─────────────────────┘
-                                     │
-                                     ▼
-                  ┌────────────────────────────────────────┐
-                  │  Reachability Engine                   │
-                  │  internal/reachability                 │
-                  │   - CPG path search (Joern export)     │
-                  │   - eBPF runtime confirmation          │
-                  └──────────────────┬─────────────────────┘
-                                     │
-                                     ▼
-                  ┌────────────────────────────────────────┐
-                  │  Risk Scoring Engine                   │
-                  │  internal/scoring                      │
-                  │   Score = CVSS × Reach × Exp × Crit    │
-                  └──────────────────┬─────────────────────┘
-                                     │
-              ┌──────────────────────┼──────────────────────┐
-              ▼                      ▼                      ▼
-   ┌───────────────────┐  ┌───────────────────┐  ┌────────────────────┐
-   │  PostgreSQL       │  │  REST API         │  │  Remediation Layer │
-   │  internal/storage │  │  cmd/aspm-api     │  │  remediation/      │
-   │  - assets         │  │  - findings       │  │  - LLM PR agent    │
-   │  - findings       │  │  - dashboards     │  │  - Renovate logic  │
-   │  - sboms / cpg    │  │  - quality gate   │  │  - VEX (CSAF 2.0)  │
-   └───────────────────┘  └───────────────────┘  └────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     supplychain-kit CLI                         │
+│                     cmd/supplychain-kit/main.go                 │
+│                                                                 │
+│  Commands: run | scan | gate | sbom | report | remediate |     │
+│            license | graph | engage | mcp | init               │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      Scanner Adapters                            │
+│                      internal/scanner/                           │
+│  ┌────────┐ ┌───────┐ ┌─────────┐ ┌──────────┐ ┌────────────┐  │
+│  │  syft  │ │ grype │ │ semgrep │ │ gitleaks │ │   joern    │  │
+│  │ (SBOM) │ │ (CVE) │ │  (SAST) │ │ (secrets)│ │   (CPG)    │  │
+│  └────────┘ └───────┘ └─────────┘ └──────────┘ └────────────┘  │
+│  ┌────────┐ ┌───────────────┐                                   │
+│  │ trivy  │ │  osv-scanner  │                                   │
+│  │ (SCA)  │ │     (SCA)     │                                   │
+│  └────────┘ └───────────────┘                                   │
+└──────────────────────────┬───────────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                Correlation & Normalization                       │
+│                internal/correlation                              │
+│   - De-duplicate across scanners                                 │
+│   - Map to common models.Finding schema                          │
+│   - Fingerprint: (rule_id, file, line, package, version)        │
+└──────────────────────────┬───────────────────────────────────────┘
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+┌─────────────────────────┐  ┌──────────────────────────────────┐
+│  Reachability Engine    │  │  Taint Analysis Engine            │
+│  internal/reachability  │  │  internal/taint                   │
+│   - CPG path search     │  │   - Source detection (HTTP, env,  │
+│   - eBPF confirmation   │  │     file, CLI args)               │
+│   - Confidence scoring  │  │   - Propagation (BFS via CPG)     │
+│                         │  │   - Sanitizer detection            │
+│                         │  │   - Sink matching (CVE symbols)   │
+│                         │  │   - Path pruning (false pos ~40%) │
+└───────────┬─────────────┘  └──────────────┬───────────────────┘
+            │                                │
+            ▼                                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     Risk Scoring                                 │
+│                     internal/scoring                             │
+│       Score = CVSS × Reachability × Exposure × Criticality       │
+└──────────────────────────┬───────────────────────────────────────┘
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+┌──────────────┐  ┌──────────────┐  ┌─────────────────┐
+│ Quality Gate │  │   Report     │  │   Remediation    │
+│ internal/    │  │  internal/   │  │   internal/      │
+│  quality     │  │   report     │  │    remediation/  │
+│              │  │              │  │      pkg         │
+│ Pass/Warn/  │  │ Markdown +   │  │ Package grouping │
+│ Fail        │  │ SARIF + DOCX │  │ Priority ranking │
+└──────────────┘  └──────────────┘  └─────────────────┘
 ```
 
-### 2.1 Ingestion Layer (`internal/ingestion`)
+### 2.1 CLI Entry Point (`cmd/supplychain-kit/main.go`)
 
-- HMAC-verified webhook receivers for GitHub, GitLab, Bitbucket.
-- Translates provider-specific events into a `ScanRequest{repo, ref, trigger}` enqueued on Redis.
-- Maintains the asset inventory (Goal: 100% real-time visibility).
+Cobra-based CLI with 14 subcommands. The `run` command is the primary entry point — it chains scan, gate, and report in one invocation. Each command can also be run independently for finer control.
 
-### 2.2 Scanner Worker (`cmd/aspm-scanner`)
+Key commands and their pipeline role:
 
-- Long-running worker that consumes Redis jobs and fans out to adapters concurrently (Go goroutines, bounded by per-tool semaphores).
-- Each adapter implements:
-  ```go
-  type Scanner interface {
-      Name() string
-      Scan(ctx context.Context, req ScanRequest) (Result, error)
-  }
-  ```
-- The worker invokes the underlying CLI (`syft`, `grype`, `semgrep`, `gitleaks`) directly when present; otherwise it shells into the official OCI image. This keeps the worker self-contained on developer laptops and bullet-proof in CI.
+| Command | Pipeline Role |
+|---------|---------------|
+| `run` | Full pipeline: scan → gate → report |
+| `scan` | Scanner orchestration only |
+| `gate` | Quality gate evaluation from findings file |
+| `sbom` | SBOM generation only (no CVE matching) |
+| `report` | Render findings to Markdown/DOCX |
+| `remediate` | Package-level remediation guidance |
+| `mcp` | MCP server for Claude Code integration |
+
+### 2.2 Scanner Adapters (`internal/scanner/`)
+
+Every scanner implements a common interface:
+
+```go
+type Scanner interface {
+    Name() string
+    Scan(ctx context.Context, req ScanRequest) (Result, error)
+}
+```
+
+Adapters shell out to the underlying CLI tool (`syft`, `grype`, etc.) and parse their JSON output. If a tool is not installed, the adapter returns `ErrBinaryNotFound` and is skipped gracefully.
+
+The `Registry` manages which adapters run based on scan mode (`sca`, `sast`, `all`):
+
+| Mode | Adapters |
+|------|----------|
+| `sca` | syft, grype, trivy, osv-scanner, joern |
+| `sast` | semgrep, gitleaks, joern |
+| `all` | all of the above |
 
 ### 2.3 Correlation & Normalization (`internal/correlation`)
 
-- Maps each adapter's native output into a common `models.Finding` shape (compatible with the DefectDojo "Generic Findings" import schema for interoperability).
-- De-duplicates by `(rule_id, file_path, line, package, version)` fingerprint. SAST/DAST findings pointing at the same root cause merge into one record with multiple `Sources`.
-- Persists raw outputs alongside the normalized record for audit and re-correlation.
+Maps each adapter's native output into a common `models.Finding` shape. De-duplicates by `(rule_id, file_path, line, package, version)` fingerprint. Each finding carries a `Source` field identifying which scanner produced it.
 
 ### 2.4 Reachability Engine (`internal/reachability`)
 
-- Static path: ingests CPG exports from Joern (`graphson` JSON), traverses from first-party "sources" (controllers, message handlers) to "sinks" (vulnerable function symbols extracted from the CVE's affected ranges).
-- Runtime path: optional eBPF sensor stream (uprobes on shared library entry points) confirming a library is *actually* loaded into the running process address space. Confirmed reachability locks the multiplier to `1.0`.
-- Trade-off (per PRD §7): dynamic-language call resolution is best-effort. The engine emits a `confidence` value so consumers can decide how to weight it.
+- **Static path:** ingests CPG exports from Joern (`graphson` JSON), traverses from first-party sources (controllers, message handlers) to sinks (vulnerable function symbols from CVE metadata).
+- **Runtime path:** optional eBPF sensor confirming a library is loaded into the running process. Graceful degradation if eBPF is unavailable.
+- **Confidence scoring:** the engine emits a `confidence` value per finding so downstream consumers can weight results appropriately.
 
-### 2.5 Risk Scoring (`internal/scoring`)
+### 2.5 Taint Analysis Engine (`internal/taint`)
 
-Implements:
+Bridges SCA and SAST findings by tracing whether user-controlled input can reach vulnerable code:
+
+- **Source detection** (`source_detector.go`): identifies user-controlled input entry points from CPG — HTTP handlers (Express, Flask, FastAPI, Django, Gin, Echo), environment variables, file reads, CLI arguments.
+- **Propagation** (`propagator.go`): BFS traversal from sources through call graph, tracking taint across function boundaries via CPG edges.
+- **Sanitizer registry** (`sanitizer.go`): 100+ known sanitizers across ecosystems (DOMPurify, validator.js, SQLAlchemy, shlex.quote, pathlib.Path). Recognized sanitizers break the taint chain.
+- **Sink matching** (`sink_matcher.go`): matches tainted nodes against CVE-affected function symbols from Grype/Trivy metadata.
+- **Path pruning:** max path length 15, max branching factor 3, confidence threshold 0.3. Reduces false positives by ~40%.
+
+### 2.6 Risk Scoring (`internal/scoring`)
 
 ```
 Risk Score = Severity(CVSS) × Reachability × Exposure × Criticality
 ```
 
 | Factor | Range | Source |
-| --- | --- | --- |
-| Severity | 0.0 – 10.0 | CVSS v3.1 base score from Grype / NVD |
-| Reachability | 0.1 (unreachable) or 1.0 (reachable / eBPF confirmed) | Reachability engine |
+|--------|-------|--------|
+| Severity | 0.0 – 10.0 | CVSS v3.1 base score from Grype/NVD |
+| Reachability | 0.1 (unreachable) or 1.0 (reachable) | Reachability + taint engine |
 | Exposure | 0.5 (internal) – 1.5 (internet-facing) | Asset metadata |
 | Criticality | 0.5 (sandbox) – 2.0 (production-tier-0) | Asset tagging |
 
-Output is normalized to a 0–100 risk score with a categorical label for dashboards.
+### 2.7 Quality Gates (`internal/quality`)
 
-### 2.6 Quality Gates (`internal/quality`)
+Deterministic function: `Evaluate(findings, policy) → Decision`. The CLI returns:
+- Exit `0` — pass
+- Exit `1` — warn (policy triggered but not blocking)
+- Exit `2` — fail (critical findings or policy violation)
 
-A gate is a deterministic function `Evaluate(findings, policy) -> Decision`. Decisions carry the violating findings so CI can render a useful failure log. The CLI returns exit code `2` for fail and `1` for warn so that pipelines distinguish "block the merge" from "annotate the PR."
+Three built-in policies: `strict`, `moderate`, `permissive`. Custom policies via YAML.
 
-### 2.7 Remediation Layer (`remediation/`)
+### 2.8 Remediation (`internal/remediation/pkg`)
 
-A separate Python service because the ecosystem for LLM orchestration, CSAF tooling, and dependency-resolver libraries (e.g., `pip-tools`, `npm-check-updates`, `dependabot-core` ports) is markedly stronger than in Go.
+Go-native package-level remediation. Groups findings by package, detects ecosystem (npm, pip, maven, go, cargo, nuget), and generates:
+- Priority ranking (P0 fix-immediately through P3 monitor)
+- Upgrade commands per package manager
+- Quick-fix mode for P0/P1 packages only
 
-- **Renovate-compatible agent** (`remediation/agents/renovate_agent.py`): given a vulnerable `(package, version_range)`, computes the nearest non-vulnerable upgrade that satisfies the manifest's existing constraints, then opens a PR via the relevant Git provider API.
-- **LLM remediation agent** (`remediation/agents/llm_agent.py`): for first-party SAST findings (e.g., a Semgrep `tainted-sql-string` rule), prompts a Claude or OpenAI model with the function body + rule explanation and proposes a refactor. Always surfaced as a PR review comment, never auto-merged.
-- **VEX generator** (`remediation/reports/vex_generator.py`): emits CSAF 2.0 Profile 5 documents using CISA status justifications:
-  - `vulnerable_code_not_present` — the reachability engine proved the path is dead.
-  - `inline_mitigation_already_exist` — a WAF rule or compensating control is registered.
-  - `vulnerable_code_cannot_be_controlled_by_adversary` — input source is trusted and authenticated.
+### 2.9 Report Generation (`internal/report`)
 
-### 2.8 REST API (`cmd/aspm-api`)
+Outputs findings in multiple formats:
+- **Markdown** — per-finding report with executive summary
+- **SARIF** — for CI platform integration
+- **DOCX** — via Pandoc (graceful degradation if not installed)
 
-- `chi`-based HTTP router, OpenAPI 3.1 spec generated at build time.
-- JWT auth (issuer pluggable: OIDC, GitHub OAuth).
-- Endpoints (selected):
-  - `POST /api/v1/scans` — kick off a scan
-  - `GET  /api/v1/findings` — paginated, filterable
-  - `GET  /api/v1/assets/{id}/risk` — current rolled-up risk
-  - `POST /api/v1/quality-gate/evaluate` — synchronous gate check
-  - `POST /api/v1/vex` — request a VEX document for a release tag
+### 2.10 MCP Server (`internal/mcp`)
 
-### 2.9 Storage (`internal/storage`)
+Stdio-based MCP server for Claude Code integration. Exposes 5 tools:
 
-PostgreSQL 16 with the schema in [migrations/](migrations/). Highlights:
+| Tool | Maps to |
+|------|---------|
+| `init_engagement` | Engagement directory bootstrap |
+| `scan_repository` | Full SCA + SAST + reachability pipeline |
+| `generate_sbom` | CycloneDX SBOM via Syft |
+| `run_gate` | Quality gate evaluation |
+| `generate_report` | Markdown/DOCX report generation |
 
-- `assets` — repos, services, deployments; tagged with `environment`, `tier`, `internet_facing`.
-- `sboms` — full CycloneDX 1.5 documents stored as `JSONB`, indexed by purl on a side table for fast CVE matching.
-- `findings` — normalized findings with FKs to assets and sboms; carries `risk_score`, `reachable`, `vex_status`.
-- `cpg_metadata` — Joern CPG export pointers (large blobs live in object storage).
-- `scan_runs` — provenance for SLSA + audit.
+### 2.11 Supporting Packages
 
-## 3. Data flow walkthrough
+| Package | Purpose |
+|---------|---------|
+| `internal/config` | Viper-based configuration (YAML + env vars) |
+| `internal/models` | Domain models (Finding, Asset, SBOM, Severity) |
+| `internal/suppress` | `.supplychain-ignore` parser and matcher |
+| `internal/graph` | Dependency graph visualization (DOT, Mermaid, ASCII) |
+| `internal/license` | License compliance scanning and policy evaluation |
+| `internal/defectdojo` | DefectDojo API client (optional push) |
+| `internal/deptrack` | Dependency-Track API client (optional push) |
 
-A typical scan of a feature branch:
+## 3. Data flow
 
-1. Developer pushes to `feature/payments`. GitHub fires a webhook.
-2. Ingestion validates the HMAC and enqueues `ScanRequest`.
-3. Scanner worker fans out: Syft generates an SBOM, Grype matches it, Semgrep + Gitleaks run in parallel against the checkout, Joern produces a CPG when configured.
-4. Correlation normalizes every adapter output into `models.Finding` and stores raw + normalized to Postgres.
-5. Reachability engine reads the CPG and, for each Grype hit, walks from sources to the affected symbol. If eBPF telemetry exists for the asset, it overrides the static verdict.
-6. Scoring annotates each finding with the integrated risk score.
-7. Quality Gate runs against the policy attached to the asset; if the PR violates, the CLI exits non-zero, blocking the merge.
-8. For new findings above the auto-remediation threshold, the remediation service either opens a Renovate-style PR (SCA) or a Claude-authored review comment (SAST).
-9. On release tag, `supplychain-kit vex --tag v1.4.0` emits a CSAF 2.0 document signed and published as a GitHub Release artifact.
+A typical scan via `supplychain-kit run myapp --repo /path/to/project`:
 
-## 4. Concurrency model
+```
+1. Init          → Create results/myapp/ directory structure + state.json
+2. SBOM          → syft generates CycloneDX 1.5 JSON
+3. CVE matching  → grype matches SBOM against vulnerability database
+4. SAST          → semgrep scans code with 32+ security rules
+5. Secrets       → gitleaks scans for hardcoded credentials
+6. Reachability  → joern CPG loaded, paths traced from sources to sinks
+7. Taint         → user input traced to vulnerable code, false positives pruned
+8. Correlation   → all findings normalized and de-duplicated
+9. Scoring       → each finding annotated with risk score
+10. Gate         → findings evaluated against policy → PASS/WARN/FAIL
+11. Report       → markdown report saved to results/myapp/report.md
+```
 
-- **Scanner worker:** one goroutine per scan job, with a per-adapter semaphore (`max_parallel_syft`, etc.) to avoid IO storms. Jobs are at-least-once; correlation is idempotent on `(scan_run_id, fingerprint)`.
-- **API:** stateless; horizontally scalable behind a load balancer.
-- **Remediation:** FastAPI + `asyncio`; LLM calls are streamed and cached in Redis keyed by `(rule_id, code_hash)` to avoid duplicate spend.
+## 4. Claude Code integration
 
-## 5. Failure modes & mitigations
+supplychain-kit runs as an MCP server inside Claude Code sessions. The orchestrator agent (`.claude/agents/orchestrator.md`) coordinates the pipeline via MCP tools, while the executor agent (`.claude/agents/executor.md`) handles domain-specific triage.
+
+A knowledge base of 7 documents (`.claude/skills/supplychain-kit/knowledge/`) provides domain context for reachability decisions, remediation commands per ecosystem, and supply chain attack patterns.
+
+Companion skills from Trail of Bits extend analysis:
+- `supply-chain-risk-auditor` — maintainer risk + takeover detection
+- `static-analysis` — CodeQL + Semgrep + SARIF triage
+- `semgrep-rule-creator` — custom rule authoring
+
+## 5. Concurrency model
+
+All scanners run via Go goroutines within the CLI process. The orchestrator uses per-adapter semaphores (`max_parallel_syft`, `max_parallel_grype`, etc.) to bound concurrent IO. Correlation is idempotent on fingerprint, so repeated runs produce consistent results.
+
+## 6. Failure modes
 
 | Failure | Mitigation |
-| --- | --- |
-| CPG too large to fit in memory | Joern runs in a sidecar container with its own memory budget; results streamed line-by-line. |
-| LLM provider outage | Remediation agent degrades to "suggest dependency upgrade only" mode and surfaces a banner on the dashboard. |
-| Webhook flood from monorepo | Ingestion debounces by `(repo, ref)` for a configurable window (default 30s). |
-| Grype DB stale | Scanner worker self-checks DB age on startup and refuses to run if older than 24h unless `--allow-stale-db`. |
+|---------|------------|
+| Scanner CLI not installed | Adapter returns `ErrBinaryNotFound`, scan continues without that scanner |
+| Joern CPG too large for memory | Results streamed line-by-line; graceful degradation to `ReachUnknown` |
+| Grype DB stale | Self-checks DB age on startup, warns if older than 24h |
+| Pandoc not installed | DOCX generation skipped, Markdown report still produced |
 
-## 6. Extension points
+## 7. Extension points
 
-- **New scanner:** implement `internal/scanner.Scanner`, register it in [internal/scanner/registry.go](internal/scanner/registry.go).
-- **New risk factor:** add a column to `findings`, extend [internal/scoring/scorer.go](internal/scoring/scorer.go), and bump the policy version.
-- **New compliance report:** add a Python module under `remediation/reports/` and a CLI subcommand; the underlying normalized data model already covers SSDF, SLSA, and SCVS attributes.
+- **New scanner:** implement `internal/scanner.Scanner`, register in `internal/scanner/registry.go`.
+- **New taint source pattern:** add detection rules in `internal/taint/source_detector.go`.
+- **New sanitizer:** add to the registry in `internal/taint/sanitizer.go`.
+- **New report format:** add renderer in `internal/report/`.
+- **New quality policy:** add YAML file in `configs/`.
+- **New MCP tool:** add definition + handler in `internal/mcp/server.go`.
 
-## 7. Out of scope (explicitly)
+## 8. Out of scope
 
-- DAST (the platform consumes DAST findings via DefectDojo import, but does not run a DAST scanner itself).
-- Cloud workload protection (delegated to existing CWPP tools; this platform consumes their alerts as additional `Source` entries on a finding).
-- Identity/secret rotation (Gitleaks discovers; rotation is delegated to the customer's IAM/secret manager).
+- DAST — the platform consumes DAST findings via DefectDojo import, but does not run DAST scanners.
+- Cloud workload protection — delegated to existing CWPP tools.
+- Secret rotation — Gitleaks discovers secrets; rotation is delegated to the customer's IAM/secret manager.
+- Database / REST API / server mode — removed in v0.6 CLI consolidation. All features are CLI-only.

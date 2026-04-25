@@ -73,7 +73,7 @@ func errRespond(msg string) (*mcp.CallToolResult, error) {
 	return respond(toolResult{Status: "error", Errors: []string{msg}})
 }
 
-// New constructs and returns a configured MCP server with all six tools registered.
+// New constructs and returns a configured MCP server with all five tools registered.
 func New() *server.MCPServer {
 	s := server.NewMCPServer(
 		serverName,

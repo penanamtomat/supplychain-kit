@@ -1366,12 +1366,11 @@ Register it in Claude Code by adding the snippet from --print-config to
 ~/.claude/mcp.json (or the project-level .claude/mcp.json).
 
 Tools exposed:
-  init_engagement    Bootstrap a new scan engagement
+  init_engagement    Bootstrap a new scan engagement (directory structure + state tracking)
   scan_repository    Run full SCA + SAST + reachability pipeline
-  generate_sbom      Generate CycloneDX SBOM via syft
+  generate_sbom      Generate CycloneDX 1.5 SBOM via syft
   run_gate           Evaluate findings against quality gate policy
-  analyze_finding    AI-powered remediation via Claude API
-  generate_report    Render Markdown (and optionally DOCX) report
+  generate_report    Render findings into Markdown (and optionally DOCX) report
 
 Examples:
   supplychain-kit mcp                  # start server (Claude Code connects automatically)

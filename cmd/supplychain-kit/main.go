@@ -1834,7 +1834,7 @@ Examples:
 			// Load policy
 			var policy *licensescan.Policy
 			if policyFile != "" {
-				// TODO: Load policy from YAML file
+				fmt.Fprintf(os.Stderr, "warn: --policy flag not yet implemented, using default policy\n")
 				policy = licensescan.DefaultPolicy()
 			} else {
 				policy = licensescan.DefaultPolicy()

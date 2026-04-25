@@ -13,7 +13,6 @@ import (
 // Config is the root configuration struct.
 type Config struct {
 	Scanners    ScannersConfig    `mapstructure:"scanners"`
-	Remediation RemediationConfig `mapstructure:"remediation"`
 	QualityGate QualityGateConfig `mapstructure:"quality_gate"`
 }
 
@@ -23,12 +22,6 @@ type ScannersConfig struct {
 	MaxParallelGrype int    `mapstructure:"max_parallel_grype"`
 	MaxParallelSAST  int    `mapstructure:"max_parallel_sast"`
 	GrypeDBMaxAgeHrs int    `mapstructure:"grype_db_max_age_hrs"`
-}
-
-type RemediationConfig struct {
-	BaseURL     string `mapstructure:"base_url"`
-	LLMProvider string `mapstructure:"llm_provider"`
-	GitHubToken string `mapstructure:"github_token"`
 }
 
 type QualityGateConfig struct {
@@ -53,8 +46,6 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("scanners.max_parallel_grype", 4)
 	v.SetDefault("scanners.max_parallel_sast", 2)
 	v.SetDefault("scanners.grype_db_max_age_hrs", 24)
-	v.SetDefault("remediation.base_url", "http://localhost:9090")
-	v.SetDefault("remediation.llm_provider", "anthropic")
 
 	// Default quality gate: fail on any Critical, warn on any High.
 	// These are overridden by quality_gate entries in the config file.

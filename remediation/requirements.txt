@@ -1,8 +1,0 @@
-fastapi>=0.110
-uvicorn[standard]>=0.27
-httpx>=0.27
-pydantic>=2.6
-anthropic>=0.34
-openai>=1.30
-PyGithub>=2.3
-packaging>=24.0

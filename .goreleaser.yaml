@@ -61,6 +61,7 @@ sboms:
 changelog:
   sort: asc
   use: github
+  format: "{{ .ShortHash }} {{ .Message }}"
   groups:
     - title: Features
       regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
@@ -86,9 +87,14 @@ release:
     ## supplychain-kit {{ .Tag }}
 
     Binaries are signed with [cosign](https://github.com/sigstore/cosign) (keyless, GitHub OIDC).
-    Each release also ships a CycloneDX SBOM per archive — the tool eats its own dog food.
+    Each release also ships a CycloneDX SBOM per archive.
 
-    Verify a download:
+    ### Quick Install
+    ```bash
+    curl -sSL https://github.com/penanamtomat/supplychain-kit/releases/download/{{ .Tag }}/supplychain-kit_{{ .Tag }}_$(uname -s)_$(uname -m).tar.gz | tar xz
+    ```
+
+    ### Verify
     ```bash
     cosign verify-blob \
       --certificate-identity-regexp 'https://github.com/penanamtomat/supplychain-kit' \

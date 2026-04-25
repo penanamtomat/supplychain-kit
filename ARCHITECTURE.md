@@ -1,4 +1,4 @@
-# Architecture — Integrated ASPM Platform
+# Architecture — supplychain-kit
 
 This document describes the technical architecture that implements the PRD ([docs/Product Requirements Document (PRD)_ Integrated Application Security Posture Management (ASPM) Platform.md](docs/Product%20Requirements%20Document%20%28PRD%29_%20Integrated%20Application%20Security%20Posture%20Management%20%28ASPM%29%20Platform.md)). It is the authoritative reference for component boundaries, data flow, and extension points.
 

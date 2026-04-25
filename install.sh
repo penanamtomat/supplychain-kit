@@ -256,6 +256,7 @@ MISSING=()
 check go   || MISSING+=("go   → https://go.dev/dl")
 check git  || MISSING+=("git  → https://git-scm.com")
 check curl || MISSING+=("curl → https://curl.se")
+check tar  || MISSING+=("tar  → install via package manager")
 
 if [ ${#MISSING[@]} -gt 0 ]; then
   error "The following required tools are missing:"
@@ -559,34 +560,97 @@ else
              || { warn "pandoc installation failed — DOCX reports unavailable"; warn "Install manually: https://pandoc.org/installing.html"; }
 fi
 
-# ── step 3: build supplychain-kit from source ─────────────────────────────────
-section "Step 3/5 — Building supplychain-kit"
+# ── step 3: install supplychain-kit binary ────────────────────────────────────
+section "Step 3/5 — Installing supplychain-kit"
 
-cd "$SCRIPT_DIR"
+GIT_VERSION=""
+SKT_INSTALLED=false
+BINARY_PATH=""
 
-# Embed version via git describe (e.g. v0.8.0-3-gabcdef).
-GIT_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev")"
-echo "  Version : ${GIT_VERSION}"
+# Try downloading pre-built binary from GitHub Releases first.
+_install_version="${VERSION:-}"
+if [ -z "$_install_version" ]; then
+  echo "  Fetching latest release version from GitHub..."
+  _install_version="$(latest_release penanamtomat/supplychain-kit 2>/dev/null)" || true
+fi
 
-echo "  Downloading Go modules..."
-go mod download
+if [ -n "$_install_version" ]; then
+  _archive="supplychain-kit_${_install_version}_${OS}_${ARCH}.tar.gz"
+  _dl_url="https://github.com/penanamtomat/supplychain-kit/releases/download/v${_install_version}/${_archive}"
+  _cs_url="https://github.com/penanamtomat/supplychain-kit/releases/download/v${_install_version}/checksums.txt"
+  _tmpdir="$(mktemp -d)"
+  _archive_path="${_tmpdir}/${_archive}"
 
-echo "  Compiling supplychain-kit..."
-mkdir -p "${SCRIPT_DIR}/bin"
-BINARY_PATH="${SCRIPT_DIR}/bin/${BINARY_NAME}"
-go build \
-  -ldflags="-s -w -X main.version=${GIT_VERSION}" \
-  -trimpath \
-  -o "$BINARY_PATH" \
-  ./cmd/supplychain-kit/...
-info "Binary built → ${BINARY_PATH} (${GIT_VERSION})"
+  echo "  Downloading ${_archive}..."
+  if curl -fsSL --retry 3 "$_dl_url" -o "$_archive_path" 2>/dev/null; then
+    # Checksum verification
+    _cs_file="${_tmpdir}/checksums.txt"
+    if curl -fsSL --retry 3 "$_cs_url" -o "$_cs_file" 2>/dev/null; then
+      echo "  Verifying checksum..."
+      if [ "$OS" = "darwin" ]; then
+        _verify_cmd="shasum -a 256"
+      else
+        _verify_cmd="sha256sum"
+      fi
+      _expected="$(grep "${_archive}" "$_cs_file" | awk '{print $1}')"
+      if [ -n "$_expected" ]; then
+        _actual="$($_verify_cmd "$_archive_path" | awk '{print $1}')"
+        if [ "$_expected" = "$_actual" ]; then
+          info "Checksum verified"
+        else
+          error "Checksum mismatch for ${_archive}"
+          error "  expected: ${_expected}"
+          error "  got:      ${_actual}"
+          rm -rf "$_tmpdir"
+          exit 1
+        fi
+      else
+        warn "No checksum entry for ${_archive} — skipping verification"
+      fi
+    else
+      warn "Could not download checksums.txt — skipping checksum verification"
+    fi
+
+    tar -xzf "$_archive_path" -C "$_tmpdir"
+    _found="$(find "$_tmpdir" -type f -name "supplychain-kit" | head -1)"
+    if [ -n "$_found" ]; then
+      BINARY_PATH="$_found"
+      GIT_VERSION="v${_install_version}"
+      SKT_INSTALLED=true
+      info "Release binary ready (v${_install_version})"
+    else
+      warn "Binary not found inside archive — falling back to source build"
+    fi
+  else
+    warn "Could not download release binary — falling back to source build"
+  fi
+  # _tmpdir cleaned up after install below
+fi
+
+if ! $SKT_INSTALLED; then
+  # Fallback: build from source
+  echo "  Building supplychain-kit from source..."
+  cd "$SCRIPT_DIR"
+  GIT_VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev")"
+  echo "  Version : ${GIT_VERSION}"
+  echo "  Downloading Go modules..."
+  go mod download
+  mkdir -p "${SCRIPT_DIR}/bin"
+  BINARY_PATH="${SCRIPT_DIR}/bin/${BINARY_NAME}"
+  go build \
+    -ldflags="-s -w -X main.version=${GIT_VERSION}" \
+    -trimpath \
+    -o "$BINARY_PATH" \
+    ./cmd/supplychain-kit/...
+  info "Binary built → ${BINARY_PATH} (${GIT_VERSION})"
+fi
 
 # ── step 4: install supplychain-kit binary to PATH ────────────────────────────
 section "Step 4/5 — Installing supplychain-kit binary"
 
 ensure_install_dir
 
-# Try /usr/local/bin, then sudo, then INSTALL_DIR.
+# Prefer /usr/local/bin, fallback to INSTALL_DIR with PATH hint.
 if [ -w "/usr/local/bin" ]; then
   copy_bin "$BINARY_PATH" "/usr/local/bin/${BINARY_NAME}"
   info "supplychain-kit installed → /usr/local/bin/${BINARY_NAME}"
@@ -597,6 +661,16 @@ elif check sudo; then
 else
   copy_bin "$BINARY_PATH" "${INSTALL_DIR}/${BINARY_NAME}"
   info "supplychain-kit installed → ${INSTALL_DIR}/${BINARY_NAME}"
+  if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+    warn "${INSTALL_DIR} is not in PATH."
+    warn "Add it: export PATH=\"\$PATH:${INSTALL_DIR}\""
+    warn "Then:   source ${SHELL_PROFILE}"
+  fi
+fi
+
+# Clean up temp dir from release download if used.
+if ${SKT_INSTALLED} && [ -n "${_tmpdir:-}" ]; then
+  rm -rf "$_tmpdir"
 fi
 
 # ── step 5: install Claude Code skill ─────────────────────────────────────────
@@ -685,9 +759,17 @@ INFOEOF
   done
 fi
 
-# ── step 6: verify ─────────────────────────────────────────────────────────────
+# ── step 6: verify ────────────────────────────────────────────────────────────
+echo ""
+echo "  Verifying installation..."
+if command -v supplychain-kit >/dev/null 2>&1; then
+  _ver_out="$(supplychain-kit --version 2>&1 || true)"
+  info "supplychain-kit --version: ${_ver_out}"
+else
+  warn "supplychain-kit not found on PATH — check PATH setup above"
+fi
+
 if ! $SKIP_TEST; then
-  echo ""
   echo "  Running go test ./... (pass --skip-test to skip)..."
   if go test ./... -count=1 2>&1 | tail -10; then
     info "All tests pass"

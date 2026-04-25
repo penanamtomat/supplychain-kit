@@ -24,8 +24,9 @@ jobs:
         with: { go-version: '1.26', check-latest: true }
       - name: Install scanners
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh  | sh -s -- -b /usr/local/bin
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          retry() { for i in 1 2 3; do "$@" && return 0; echo "retry $i/3 failed"; sleep 5; done; return 1; }
+          retry sh -c 'curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.43.0'
+          retry sh -c 'curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.111.1'
           pipx install semgrep
       - name: Build supplychain-kit
         run: go build -o bin/supplychain-kit ./cmd/supplychain-kit

@@ -1,243 +1,173 @@
 # supplychain-kit
 
-> An open-source CLI tool for supply chain security — unifies SCA, SAST, secret scanning, reachability analysis, and automated remediation into a single, risk-aware control plane. Runs locally or in CI pipelines with no external services required.
+> Open-source CLI for supply chain security — SCA, SAST, secret scanning, reachability analysis, and risk-aware quality gates in a single binary.
 
-`supplychain-kit` is the reference implementation of the ASPM platform described in [docs/Product Requirements Document (PRD)_ Integrated Application Security Posture Management (ASPM) Platform.md](docs/Product%20Requirements%20Document%20%28PRD%29_%20Integrated%20Application%20Security%20Posture%20Management%20%28ASPM%29%20Platform.md). It moves security teams from siloed scanning to a cohesive, prioritized risk model that scales with AI-accelerated development.
+Runs locally. No database, no Docker, no external services. One command to scan, score, and gate your project.
 
 ---
 
-## Why this exists
+## Install
 
-Modern applications are 70–90% third-party code, supply chain attacks grew 742% year-over-year, and AI assistants are pushing more code into production faster than humans can review it. Traditional ASOC tools generate alert fatigue because they cannot answer the only question that matters: **"Is this vulnerability actually reachable in my running application?"**
-
-This platform answers that question by:
-
-- Generating SBOMs once and continuously matching them against new CVEs (scan-once, monitor-always).
-- Building a Code Property Graph (CPG) and correlating it with runtime eBPF telemetry to determine real reachability.
-- Calculating a contextual risk score: `Severity × Reachability × Exposure × Criticality`.
-- Auto-generating remediation PRs and CSAF 2.0 VEX reports for downstream consumers.
-
-## High-level features
-
-| Capability | Implementation |
-| --- | --- |
-| SBOM generation | [Syft](https://github.com/anchore/syft) wrapper (CycloneDX 1.5) |
-| Vulnerability matching | [Grype](https://github.com/anchore/grype) — SBOM-first, no recompute |
-| SAST | [Semgrep](https://semgrep.dev) (rules) + [Joern](https://joern.io) (CPG) |
-| Secret scanning | [Gitleaks](https://github.com/gitleaks/gitleaks) |
-| Normalization / dedup | DefectDojo-compatible schema in [internal/correlation](internal/correlation/) |
-| Reachability | CPG analysis + eBPF runtime confirmation in [internal/reachability](internal/reachability/) |
-| Risk scoring | Integrated formula in [internal/scoring/scorer.go](internal/scoring/scorer.go) |
-| Remediation | Mend-Renovate-style PRs + LLM agent in [remediation/agents](remediation/agents/) |
-| VEX reporting | CSAF 2.0 (Profile 5) in [remediation/reports/vex_generator.py](remediation/reports/vex_generator.py) |
-| Quality Gates | Configurable CI gates in [internal/quality](internal/quality/) |
-
-## Tech stack
-
-- **Core engine:** Go — single static binary, no runtime dependencies.
-- **Scanners:** Syft, Grype, Semgrep, Gitleaks, Joern (all external CLIs, installed separately).
-- **No database, no Redis, no Docker required** — runs anywhere a Go binary can run.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component diagram and data flow.
-
-## Repository layout
-
-```
-.
-├── cmd/
-│   └── supplychain-kit/    # CLI entry point
-├── internal/               # Private Go packages
-│   ├── agenticsast/        # Snippet-level SAST (used in v0.8 Claude Code integration)
-│   ├── config/             # Viper-based configuration (configs/aspm.yaml)
-│   ├── correlation/        # Finding normalization & dedup
-│   ├── defectdojo/         # DefectDojo API client (used by v0.7 CLI commands)
-│   ├── deptrack/           # Dependency-Track API client (used by v0.7 CLI commands)
-│   ├── models/             # Domain models (Asset, Finding, SBOM, ...)
-│   ├── quality/            # Quality Gate evaluator (CI break/pass)
-│   ├── reachability/       # CPG reachability engine (Joern + static analysis)
-│   ├── scanner/            # Adapters: syft, grype, semgrep, joern, gitleaks
-│   └── scoring/            # Integrated Risk Score calculator
-├── pkg/                    # Public Go packages (importable)
-│   ├── types/              # Shared types (CycloneDX, CVSS, ...)
-│   └── sbom/               # SBOM helpers
-├── configs/                # Sample configuration files
-├── docs/                   # PRD + design docs
-├── scripts/                # Bootstrap & developer helpers
-└── results/                # Local scan reports (gitignored)
-```
-
-## Installation
-
-### Prerequisites
-
-- [Go 1.22+](https://go.dev/dl) — required to build from source
-- `git` and `curl` — required by the installer
-- Scanner tools (installed automatically by `install.sh`): `syft`, `grype`, `gitleaks`, `semgrep`
-
-### One-liner installer (Linux / macOS / Windows Git Bash)
+**Linux / macOS (one-liner):**
 
 ```bash
-git clone https://github.com/penanamtomat/supplychain-kit
+curl -fsSL https://raw.githubusercontent.com/penanamtomat/supplychain-kit/main/install.sh | bash
+```
+
+**Manual build from source:**
+
+```bash
+git clone https://github.com/penanamtomat/supplychain-kit.git
 cd supplychain-kit
 bash install.sh
 ```
 
-The installer will:
-1. Verify `go`, `git`, `curl` are available
-2. Install `syft`, `grype`, `gitleaks`, `semgrep` to `~/.local/bin`
-3. Build and install `supplychain-kit` binary to `~/.local/bin`
+**Windows:** Not supported natively. Use WSL2: `wsl --install && wsl bash install.sh`
+
+The installer automatically installs scanner tools (`syft`, `grype`, `gitleaks`, `semgrep`, `joern`) and builds the binary.
 
 **Installer options:**
 
 ```bash
-bash install.sh                        # full install (all scanner tools)
-bash install.sh --no-semgrep           # skip semgrep (if Python is not available)
-bash install.sh --prefix /usr/local    # install to a different directory
+bash install.sh                        # full install
+bash install.sh --no-semgrep           # skip semgrep
+bash install.sh --no-pandoc            # skip pandoc (not needed for markdown reports)
+bash install.sh --prefix /usr/local    # install to a custom directory
 ```
 
-After installation, reload your shell and verify:
+**Uninstall:**
 
 ```bash
-source ~/.bashrc          # or: source ~/.zshrc
-supplychain-kit --help
-```
-
-### Uninstall
-
-```bash
-bash uninstall.sh           # remove supplychain-kit binary only
-bash uninstall.sh --tools   # also remove syft, grype, gitleaks, semgrep
+bash uninstall.sh           # remove binary only
+bash uninstall.sh --tools   # also remove scanner tools
 ```
 
 ---
 
 ## Quick Start
 
-### Install
-
 ```bash
-# One-liner (Linux / macOS)
+# Install
 curl -fsSL https://raw.githubusercontent.com/penanamtomat/supplychain-kit/main/install.sh | bash
 
-# Or download the binary from GitHub Releases
-# https://github.com/penanamtomat/supplychain-kit/releases/latest
+# Scan your project (SCA + SAST + secrets + quality gate)
+supplychain-kit run myapp-2026q1 --repo /path/to/project
+
+# View results
+cat results/myapp-2026q1/report.md
 ```
 
-### Scan your project
+**Step-by-step:**
 
 ```bash
-# All-in-one scan + report + quality gate
-supplychain-kit run my-engagement --repo /path/to/your/project
-
-# Supply chain only
-supplychain-kit run my-engagement --repo /path/to/your/project --mode sca
-
-# SAST + secrets only
-supplychain-kit run my-engagement --repo /path/to/your/project --mode sast
+supplychain-kit init myapp-2026q1 --repo /path/to/project    # bootstrap engagement
+supplychain-kit scan --repo /path/to/project --mode sca       # scan dependencies only
+supplychain-kit gate --findings results/findings.json         # evaluate quality gate
+supplychain-kit report --engagement myapp-2026q1              # generate report
 ```
 
-### Step-by-step
+---
 
-```bash
-supplychain-kit init my-engagement --repo /path/to/your/project
-supplychain-kit scan --repo /path/to/your/project --format json > results/findings.json
-supplychain-kit gate --findings results/findings.json
-supplychain-kit report --engagement my-engagement
-```
+## What It Does
+
+| Step | Tool | Purpose |
+|------|------|---------|
+| SBOM generation | [Syft](https://github.com/anchore/syft) | CycloneDX 1.5 software bill of materials |
+| Vulnerability matching | [Grype](https://github.com/anchore/grype) | Match SBOM against CVE database |
+| Additional SCA | [Trivy](https://trivy.dev), [osv-scanner](https://google.github.io/osv-scanner/) | Extra vulnerability coverage |
+| SAST | [Semgrep](https://semgrep.dev) | Code vulnerability detection |
+| Secret scanning | [Gitleaks](https://github.com/gitleaks/gitleaks) | Hardcoded secrets and credentials |
+| Reachability | [Joern](https://joern.io) | Code Property Graph — is the CVE actually reachable? |
+| Taint analysis | Built-in | Trace user input to vulnerable sinks |
+| Risk scoring | Built-in | `CVSS × Reachability × Exposure × Criticality` |
+| Quality gate | Built-in | Pass/warn/fail with configurable policy |
+
+**Key differentiator:** supplychain-kit doesn't just list CVEs — it traces whether user-controlled input can actually reach vulnerable code paths, reducing false positives by ~40%.
+
+---
+
+## Scanner Modes
+
+| Mode | Scanners | What it finds |
+|------|----------|---------------|
+| `sca` | syft, grype, trivy, osv-scanner, joern | Dependency CVEs + reachability |
+| `sast` | semgrep, gitleaks, joern | Code vulnerabilities + secrets + reachability |
+| `all` | all of the above | Everything (default) |
+
+---
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `supplychain-kit run <name> --repo <path>` | Full scan + gate + report (recommended) |
+| `supplychain-kit scan --repo <path>` | Scan only, output findings |
+| `supplychain-kit gate --findings <file>` | Evaluate quality gate |
+| `supplychain-kit sbom --repo <path>` | Generate SBOM (no vulnerability scan) |
+| `supplychain-kit report --engagement <name>` | Generate markdown/DOCX report |
+| `supplychain-kit engage list` | List all past engagements |
+| `supplychain-kit engage status <name>` | Show engagement details |
+| `supplychain-kit remediate <findings.json>` | Package-level remediation guidance |
+| `supplychain-kit license --engagement <name>` | Scan dependency licenses |
+| `supplychain-kit graph <findings.json>` | Dependency graph visualization |
+| `supplychain-kit mcp` | Start MCP server (for Claude Code) |
 
 ---
 
 ## Usage
 
-### Quick start — one command, full report
-
-The `run` command is the primary way to use supplychain-kit. It scans a repository, evaluates the quality gate, and generates a full report in one step:
+### Full Scan (one command)
 
 ```bash
-supplychain-kit run <engagement-name> --repo <url-or-path> [--mode sca|sast|all]
-```
-
-**Examples:**
-
-```bash
-# Scan a remote GitHub repository (cloned automatically, deleted after scan)
-supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo
-
-# Scan a local project directory
+# Scan a local project
 supplychain-kit run myapp-2026q1 --repo /path/to/project
 
-# Supply chain only (dependency CVEs)
-supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo --mode sca
+# Scan a remote repo (cloned automatically, deleted after scan)
+supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo
 
-# SAST only (code issues + secrets)
+# Specific mode
+supplychain-kit run myapp-2026q1 --repo /path/to/project --mode sca
 supplychain-kit run myapp-2026q1 --repo /path/to/project --mode sast
 
-# Specific branch or commit
+# Specific branch
 supplychain-kit run myapp-2026q1 --repo https://github.com/org/repo --ref main
 ```
 
-**What happens when you run this command:**
+**What happens under the hood:**
 
 ```
-1. Clone repo (if URL)       → temporary directory, auto-deleted after scan
-2. syft                      → generate SBOM (software bill of materials)
-3. grype                     → match SBOM against CVE database
-4. semgrep + gitleaks        → SAST code scan + secret detection
-5. Quality gate              → evaluate findings against policy
-6. Generate report           → save all output to results/<engagement>/
+Clone repo (if URL) → syft (SBOM) → grype (CVEs) → semgrep + gitleaks (SAST) → quality gate → report
 ```
 
-**Output files** saved to `results/<engagement-name>/`:
+**Output files** in `results/<engagement>/`:
 
 | File | Description |
-|---|---|
-| `report.md` | Full markdown report (executive summary + findings table) |
-| `findings.json` | All findings in JSON format (for CI / downstream tools) |
-| `findings.txt` | Findings as a plain-text table |
-| `summary.json` | Counts by severity + metadata |
+|------|-------------|
+| `report.md` | Markdown report with executive summary and findings |
+| `findings.json` | All findings in JSON |
+| `summary.json` | Severity counts + metadata |
 
 **Exit codes:**
 
 | Code | Meaning |
-|---|---|
+|------|---------|
 | `0` | Pass — no policy violations |
 | `1` | Warn — High severity findings present |
 | `2` | Fail — Critical severity findings present |
 
----
-
-### Manage engagements
-
-Each `run` invocation creates an engagement. Use `engage` to review past scans:
+### Engagement Tracking
 
 ```bash
-# List all past engagements
 supplychain-kit engage list
-
-# Show details of a specific engagement
-supplychain-kit engage status myapp-2026q1
 ```
 
-Example output of `engage list`:
 ```
 ENGAGEMENT        DATE        TOTAL  CRITICAL  HIGH  MEDIUM  LOW
 myapp-2026q1      2026-04-22  11     0         4     7       0
 myapp-clean       2026-04-21  0      0         0     0       0
 ```
 
----
-
-### Scanner modes
-
-| Mode | Scanners used | What it finds |
-|---|---|---|
-| `sca` | syft → grype | Dependency CVEs (supply chain vulnerabilities) |
-| `sast` | semgrep + gitleaks | Code vulnerabilities + hardcoded secrets |
-| `all` | all of the above | Everything (default) |
-
----
-
-### Generate SBOM only (no vulnerability scan)
+### SBOM Generation
 
 ```bash
 # CycloneDX 1.5 JSON (default)
@@ -245,208 +175,166 @@ supplychain-kit sbom --repo /path/to/project --out sbom.json
 
 # SPDX 2.3 JSON
 supplychain-kit sbom --repo /path/to/project --format spdx --out sbom.spdx.json
-
-# Save to results/<name>/sbom.json
-supplychain-kit sbom --repo /path/to/project --target myapp
 ```
 
----
+### Quality Gate Policies
 
-### Run individual steps manually
+Three policies included in `configs/`:
 
-If you need more control, each step can be run separately:
-
-```bash
-# 1. Scan only — output JSON findings
-supplychain-kit scan --repo /path/to/project --mode sca --out findings.json
-
-# 2. Evaluate quality gate from a findings file
-supplychain-kit gate --findings findings.json
-
-# 3. Pipe scan directly into gate (no intermediate file)
-supplychain-kit scan --repo . --format json | supplychain-kit gate
-```
-
----
-
-### CI integration (GitHub Actions)
-
-Full workflow — scans on every push and pull request, fails the pipeline on Critical findings:
-
-```yaml
-name: Security Scan
-
-on:
-  push:
-    branches: [main, dev]
-  pull_request:
-
-jobs:
-  security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install supplychain-kit
-        run: bash <(curl -fsSL https://raw.githubusercontent.com/penanamtomat/supplychain-kit/main/install.sh)
-
-      - name: Run security scan
-        run: |
-          supplychain-kit run ${{ github.event.repository.name }}-${{ github.run_number }} \
-            --repo . \
-            --mode all \
-            --policy configs/policy-strict.yaml
-
-      - name: Upload findings
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: security-findings
-          path: results/
-```
-
-Exit codes are handled automatically by GitHub Actions:
-- Exit `0` → pipeline passes
-- Exit `1` → pipeline fails (warn policy triggered)
-- Exit `2` → pipeline fails (Critical found)
-
-To scan without blocking the pipeline (report only):
-
-```yaml
-      - name: Security scan (non-blocking)
-        run: supplychain-kit run myapp --repo . --mode sca
-        continue-on-error: true
-```
-
-Two-step variant — scan then gate separately (useful for uploading artifacts before gating):
-
-```yaml
-      - name: Scan
-        run: supplychain-kit scan --repo . --format json --out findings.json
-
-      - name: Upload findings
-        uses: actions/upload-artifact@v4
-        with:
-          name: findings
-          path: findings.json
-
-      - name: Quality gate
-        run: supplychain-kit gate --findings findings.json --policy configs/policy-strict.yaml
-```
-
----
-
-### CI integration (GitLab CI)
-
-```yaml
-security-scan:
-  stage: test
-  image: ubuntu:22.04
-  before_script:
-    - apt-get update -qq && apt-get install -y -qq curl git
-    - bash <(curl -fsSL https://raw.githubusercontent.com/penanamtomat/supplychain-kit/main/install.sh)
-    - export PATH="$PATH:$HOME/.local/bin"
-  script:
-    - supplychain-kit run $CI_PROJECT_NAME-$CI_PIPELINE_ID --repo . --mode all
-  artifacts:
-    when: always
-    paths:
-      - results/
-    expire_in: 30 days
-  allow_failure: false
-```
-
-Non-blocking variant (report only, pipeline never fails):
-
-```yaml
-security-scan:
-  script:
-    - supplychain-kit run $CI_PROJECT_NAME-$CI_PIPELINE_ID --repo . --mode all
-  allow_failure: true
-```
-
----
-
-### Policy configuration
-
-Three ready-made policies are included in `configs/`:
-
-| File | Behaviour | Use case |
-|---|---|---|
-| `policy-strict.yaml` | Fail on Critical **and** High | `main` branch, pre-release gate |
+| Policy | Behavior | Use case |
+|--------|----------|----------|
+| `policy-strict.yaml` | Fail on Critical **and** High | `main` branch, pre-release |
 | `policy-moderate.yaml` | Fail on Critical, warn on High | Feature branches (default) |
 | `policy-permissive.yaml` | Warn only, never fail | Onboarding, legacy repos |
 
 ```bash
-# Use a specific policy
 supplychain-kit gate --findings findings.json --policy configs/policy-strict.yaml
-
-# Pipe scan output directly into gate (no intermediate file)
-supplychain-kit scan --repo . --format json | supplychain-kit gate --policy configs/policy-moderate.yaml
 ```
 
-Custom policy format:
+### Remediation
 
-```yaml
-quality_gate:
-  fail_on:
-    - severity: critical
-    - severity: high
-      max_count: 0   # zero tolerance
-  warn_on:
-    - severity: medium
+```bash
+# Package-level remediation guidance with priority ranking
+supplychain-kit remediate results/myapp/findings.json
+
+# Show only quick-fix commands (P0/P1 packages)
+supplychain-kit remediate results/myapp/findings.json --quick-fix
+```
+
+### License Compliance
+
+```bash
+supplychain-kit license --engagement myapp
+# Output: results/myapp/license-report.md
+```
+
+### Dependency Graph
+
+```bash
+# ASCII graph (terminal)
+supplychain-kit graph results/myapp/findings.json --format ascii
+
+# Mermaid.js (for markdown/docs)
+supplychain-kit graph results/myapp/findings.json --format mermaid
+
+# Graphviz DOT
+supplychain-kit graph results/myapp/findings.json --format dot
+```
+
+### MCP Server (Claude Code)
+
+```bash
+# Start MCP server (stdio transport)
+supplychain-kit mcp
+
+# Print mcp.json registration snippet
+supplychain-kit mcp --print-config
+```
+
+Exposes 5 tools for Claude Code automation:
+
+| Tool | Purpose |
+|------|---------|
+| `init_engagement` | Bootstrap scan engagement |
+| `scan_repository` | Run full SCA + SAST + reachability pipeline |
+| `generate_sbom` | Generate CycloneDX SBOM via Syft |
+| `run_gate` | Evaluate findings against quality gate |
+| `generate_report` | Render findings to Markdown/DOCX report |
+
+### Suppression (`.supplychain-ignore`)
+
+Suppress false positives with a `.supplychain-ignore` file in your project root:
+
+```
+# Suppress specific CVE
+CVE-2023-12345
+
+# Suppress by rule + path pattern
+semgrep.tainted-sql  path:internal/legacy/*.go
+
+# Suppress by package with reason
+*  package:github.com/dead/pkg  reason:unmaintained, isolated in dev-only code
 ```
 
 ---
 
-## Command reference
+## Project Structure
 
-| Command | Description |
-|---|---|
-| `supplychain-kit run <name> --repo <url\|path>` | **Full scan + report in one command** (recommended) |
-| `supplychain-kit engage list` | List all past engagements |
-| `supplychain-kit engage status <name>` | Show details of a specific engagement |
-| `supplychain-kit scan --repo <url\|path>` | Run scan only, no report |
-| `supplychain-kit sbom --repo <url\|path>` | Generate SBOM without vulnerability scan |
-| `supplychain-kit gate --findings <file>` | Evaluate findings against quality gate policy |
+```
+supplychain-kit/
+├── cmd/supplychain-kit/     # CLI entry point
+├── internal/
+│   ├── config/              # Configuration (Viper)
+│   ├── correlation/         # Finding normalization and dedup
+│   ├── graph/               # Dependency graph visualization
+│   ├── license/             # License compliance scanning
+│   ├── mcp/                 # MCP server for Claude Code
+│   ├── models/              # Domain models (Finding, Asset, SBOM)
+│   ├── quality/             # Quality gate evaluator
+│   ├── reachability/        # CPG reachability engine (Joern)
+│   ├── remediation/pkg/     # Package-level remediation
+│   ├── report/              # Report generation
+│   ├── scanner/             # Scanner adapters (syft, grype, semgrep, joern, gitleaks, trivy, osv)
+│   ├── scoring/             # Risk score calculator
+│   ├── suppress/            # .supplychain-ignore suppression
+│   └── taint/               # Taint analysis engine
+├── configs/                 # Policies, semgrep rules, templates
+├── remediation/             # Python-based remediation (agents, reports)
+├── docs/                    # PRD, development plan, architecture
+├── scripts/                 # Developer helpers
+└── results/                 # Local scan output (gitignored)
+```
 
 ---
 
 ## Configuration
 
-Configuration file: `configs/aspm.yaml`. Environment variables use the prefix `ASPM_`.
+Config file: `configs/aspm.yaml`. Environment variables use prefix `ASPM_`.
 
 | Variable | Purpose | Required |
-|---|---|---|
-| `ASPM_SCANNERS_WORK_DIR` | Temp directory for scanner workfiles | No (default: `/tmp/aspm-work`) |
+|----------|---------|----------|
+| `ASPM_SCANNERS_WORK_DIR` | Temp directory for scanner workfiles | No |
 | `ASPM_QUALITY_GATE_FAIL_ON` | Override fail-on severity rules | No |
 | `ASPM_QUALITY_GATE_WARN_ON` | Override warn-on severity rules | No |
+
+---
 
 ## Roadmap
 
 | Version | Focus | Status |
 |---------|-------|--------|
-| v0.3–v0.5 | SCA pipeline, SAST pipeline, Quality Gate | ✅ Done |
-| v0.6 | Reachability engine + CLI consolidation | 🔧 In Progress |
-| v0.7 | Dependency-Track & DefectDojo CLI commands | Planned |
-| v0.8 | Claude Code MCP integration + Agentic SAST | Planned |
-| v1.0 | Binary release, docs, Homebrew | Planned |
+| v0.3 – v0.5 | SCA pipeline, SAST pipeline, quality gate | Done |
+| v0.6 | Reachability engine + CLI consolidation | Done |
+| v0.7 | Dependency-Track + DefectDojo CLI commands | Done |
+| v0.8 | Claude Code MCP integration + report generation | Done |
+| v0.9 | Taint analysis engine (dependency-aware SAST) | Done |
+| v0.9.5 | Remediation, license scanning, dependency graph | Done |
+| **v1.0** | **Public release** | **Released** |
+| v1.1 | Homebrew, GitHub Action, VEX reports | Planned |
+| v1.2 | IaC scanning, container image scanning | Planned |
+| v1.3 | ML-enhanced detection | Planned |
 
-See [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) for detailed task breakdown.
+See [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) for detailed task breakdown.
+
+---
 
 ## Compliance
 
-The platform produces evidence aligned with:
+Produces evidence aligned with:
 
-- **NIST SSDF (SP 800-218)** — provenance and release-integrity attestations.
-- **SLSA L1–L3** — build-time integrity claims.
-- **OWASP SCVS** — vendor-risk and outdated-component analytics.
-- **CSAF 2.0 (Profile 5) VEX** — machine-readable status with CISA justifications.
+- **NIST SSDF (SP 800-218)** — provenance and release-integrity attestations
+- **SLSA L1–L3** — build-time integrity claims
+- **OWASP SCVS** — vendor-risk and outdated-component analytics
+- **CSAF 2.0 (Profile 5) VEX** — machine-readable vulnerability status
 
-## License
-
-Apache-2.0. See [LICENSE](LICENSE) (to be added).
+---
 
 ## Contributing
 
-This is a reference implementation. Issues and PRs that align with the PRD's four-phase roadmap are welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding conventions, and PR process.
+
+See [SECURITY.md](SECURITY.md) for responsible vulnerability disclosure.
+
+## License
+
+Apache-2.0

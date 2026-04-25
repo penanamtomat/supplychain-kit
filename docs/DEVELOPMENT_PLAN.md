@@ -258,7 +258,7 @@ MCP adalah backbone utama v0.8. Semua otomasi Claude Code mengalir melalui ini.
 - [x] Tool `scan_repository` — jalankan full pipeline scan (SCA + SAST + reachability), return structured findings
 - [x] Tool `generate_sbom` — hasilkan SBOM dari repo (Syft), return path + summary
 - [x] Tool `run_gate` — evaluasi findings terhadap policy, return pass/warn/fail + violations
-- [ ] Tool `analyze_finding` — kirim satu finding ke Claude API, terima AI explanation + remediation suggestion
+- [ ] Tool `analyze_finding` — analisis satu finding dengan template-based remediation, return explanation + fix suggestion
 - [x] Tool `generate_report` — render findings ke Markdown report, simpan ke engagement dir
 - [x] Setiap tool return structured JSON: `{status, data, summary, errors}`
 - [x] Registrasi otomatis: generate `~/.claude/mcp.json` snippet via `supplychain-kit mcp --print-config`
@@ -269,12 +269,12 @@ MCP adalah backbone utama v0.8. Semua otomasi Claude Code mengalir melalui ini.
 
 Mengikuti pola Orchestrator + Executor dari pentest-kit, diadaptasi ke supply chain workflow.
 
-- [ ] `.claude/agents/orchestrator.md` — Orchestrator agent: koordinasi full engagement workflow
+- [x] `.claude/agents/orchestrator.md` — Orchestrator agent: koordinasi full engagement workflow
   - Terima: engagement name, repo path, optional policy + mode
   - Jalankan fase secara berurutan via MCP tools: Init → SBOM → Scan → Gate → Analyze → Report
   - Monitor progress, handle error gracefully, ringkaskan hasil ke user
   - **Tidak pernah** jalankan binary langsung — semua via MCP tools
-- [ ] `.claude/agents/executor.md` — Executor agent: spesialis per domain (SCA, SAST, Analysis)
+- [x] `.claude/agents/executor.md` — Executor agent: spesialis per domain (SCA, SAST, Analysis)
 
 ---
 
@@ -311,18 +311,14 @@ Command baru untuk bootstrap engagement.
 - [x] `supplychain-kit init <engagement> --repo <path> [--policy <preset>] [--out <dir>]`
 - [x] Buat struktur direktori: `results/<engagement>/findings/`, `reports/`, `sbom/`, `state.json`
 - [x] `state.json`: track fase yang sudah selesai (Init → SBOM → SCA → SAST → Gate → Report)
-- [ ] `supplychain-kit status <engagement>` — tampilkan progress engagement (engageStatusCmd ada, perlu wire ke state.json)
+- [ ] `supplychain-kit status <engagement>` — saat ini baca summary.json, perlu wire ke state.json untuk progress fase
 
 ---
 
-### 6. AI-Powered Remediation via Claude API
+### 6. Template-Based Remediation
 
-- [ ] `internal/claudeai/remediation.go` — kirim finding ke Claude API, terima structured remediation
-- [ ] `supplychain-kit analyze --findings findings.json [--top 10]` — AI analysis top-N findings
-- [ ] Output per finding: technical explanation + reachability-aware fix recommendation + upgrade command + breaking change warning + verify step
-- [ ] Support `ANTHROPIC_API_KEY` via env var atau `configs/aspm.yaml`
-- [ ] Graceful degradation: jika API key tidak ada, skip AI analysis tanpa error fatal
-- [ ] Remediation priority dipengaruhi reachability:
+- [x] `configs/report-templates/finding.md.tmpl` — template Markdown per finding dengan remediation section
+- [x] Remediation priority dipengaruhi reachability:
   - `reachable: YES` → "Fix segera. Prioritas 1."
   - `reachable: NO` → "Fix di sprint berikutnya."
   - `reachable: UNKNOWN` → "Treat as reachable sampai terbukti sebaliknya."
@@ -356,7 +352,6 @@ Command baru untuk bootstrap engagement.
 
 - [ ] Test MCP server: jalankan `supplychain-kit mcp` sebagai subprocess, kirim JSON-RPC request, validasi response
 - [ ] Test `init` command: verifikasi struktur direktori dan `state.json` dibuat dengan benar
-- [ ] Test `analyze` command: mock Claude API, verifikasi remediation di-parse dan di-output dengan benar
 - [ ] Test `report` command: verifikasi Markdown + DOCX di-generate dari fixture findings
 - [ ] Integration test skill + MCP: simulasikan full workflow dari skill invocation sampai report
 
@@ -547,13 +542,13 @@ User: /security-scan
       2. generate_sbom    → SBOM dari repo
       3. scan_repository  → SCA + SAST + reachability
       4. run_gate         → evaluasi policy
-      5. analyze_finding  → AI remediation top-N CVE
+      5. analyze_finding  → template-based remediation top-N findings
       6. generate_report  → Markdown report
   → User terima: summary + gate verdict + report path
 ```
 
 _Pick any unchecked item, open an issue, and submit a PR to `dev`._
 
-**Status v0.8:** Sebagian besar selesai — MCP server, knowledge base, skill, init command, report generation, hooks templates sudah implemented. Item yang masih pending: two-tier agent architecture, `analyze_finding` tool (AI via API), `status` command wire ke state.json.
+**Status v0.8:** Sebagian besar selesai — MCP server, knowledge base, skill, init command, report generation, hooks templates, two-tier agent files sudah implemented. Item yang masih pending: `analyze_finding` MCP tool, `status` command wire ke state.json, `report --check-deps`, template DOCX cover page.
 
 ---

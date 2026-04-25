@@ -111,6 +111,42 @@ bash uninstall.sh --tools   # also remove syft, grype, gitleaks, semgrep
 
 ---
 
+## Quick Start
+
+### Install
+
+```bash
+# One-liner (Linux / macOS)
+curl -fsSL https://raw.githubusercontent.com/penanamtomat/supplychain-kit/main/install.sh | bash
+
+# Or download the binary from GitHub Releases
+# https://github.com/penanamtomat/supplychain-kit/releases/latest
+```
+
+### Scan your project
+
+```bash
+# All-in-one scan + report + quality gate
+supplychain-kit run my-engagement --repo /path/to/your/project
+
+# Supply chain only
+supplychain-kit run my-engagement --repo /path/to/your/project --mode sca
+
+# SAST + secrets only
+supplychain-kit run my-engagement --repo /path/to/your/project --mode sast
+```
+
+### Step-by-step
+
+```bash
+supplychain-kit init my-engagement --repo /path/to/your/project
+supplychain-kit scan --repo /path/to/your/project --format json > results/findings.json
+supplychain-kit gate --findings results/findings.json
+supplychain-kit report --engagement my-engagement
+```
+
+---
+
 ## Usage
 
 ### Quick start — one command, full report

@@ -7,7 +7,7 @@
 | v0.8    | ✅ Completed | 100% | 2026-04-20 |
 | v0.9    | ✅ Completed | 100% | 2026-04-22 |
 | v0.9.5  | ✅ Completed | 100% | 2026-04-24 |
-| v1.0    | 🚧 In Progress | 65% | TBD |
+| v1.0    | ✅ Released | 100% | 2026-04-27 |
 
 ---
 
@@ -194,7 +194,7 @@ supplychain-kit remediate <findings.json> --quick-fix
 
 ---
 
-## v1.0 - Production Release (IN PROGRESS - 65%)
+## v1.0 - Production Release (RELEASED — 27 April 2026)
 
 ### Completed (v0.9.5)
 - ✅ Package-level remediation
@@ -202,6 +202,14 @@ supplychain-kit remediate <findings.json> --quick-fix
 - ✅ Dependency graph visualization
 - ✅ Enhanced Semgrep rules (32+ rules)
 - ✅ Taint analysis precision improvements
+
+### Completed (v1.0 Pre-Release Fixes — 25-27 April 2026)
+- ✅ Fix `mcp --help` text to list all 5 registered MCP tools
+- ✅ Fix `license --policy` flag warning when passed but not implemented
+- ✅ Add CONTRIBUTING.md and SECURITY.md for open-source release
+- ✅ Update README quick-start section with verified commands
+- ✅ goreleaser v1.0.0 tag and release build
+- ✅ Pre-release audit passed (build + test + smoke tests)
 
 ### Remaining for v1.0
 

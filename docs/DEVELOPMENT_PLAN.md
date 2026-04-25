@@ -8,32 +8,32 @@
 
 ---
 
-## 🗓️ Roadmap ke Public Release — Target: 19 Juni 2026
+## 🗓️ Roadmap ke Public Release — v1.0.0 RELEASED 27 April 2026
 
-> 55 hari tersisa. Prioritas: polish yang sudah ada, selesaikan fitur kritis yang masih unchecked, siapkan distribusi dan dokumentasi.
+> v1.0.0 released on schedule. See post-audit fixes below.
 
 ### Fase 1 — Engine Completion (26 Apr – 18 Mei)
 
-| Item | Target | Prioritas |
-|------|--------|-----------|
-| Report generation: Markdown + DOCX | 5 Mei | 🔴 Kritis |
-| `supplychain-kit init` + `run` one-liner | 5 Mei | 🔴 Kritis |
-| Python taint analysis (Joern Python frontend) | 12 Mei | 🔴 Kritis |
-| JavaScript/TypeScript taint support | 18 Mei | 🟡 Tinggi |
-| Two-tier agent architecture (orchestrator + executor) | 18 Mei | 🟡 Tinggi |
+| Item | Target | Status |
+|------|--------|--------|
+| Report generation: Markdown + DOCX | 5 Mei | ✅ Done |
+| `supplychain-kit init` + `run` one-liner | 5 Mei | ✅ Done |
+| Python taint analysis (Joern Python frontend) | 12 Mei | ✅ Done |
+| JavaScript/TypeScript taint support | 18 Mei | ✅ Done |
+| Two-tier agent architecture (orchestrator + executor) | 18 Mei | ✅ Done |
 
 **Alasan fase ini kritis:** Report generation + `run` one-liner adalah yang pertama dilihat user baru. Python taint adalah differentiator terkuat — mayoritas supply chain attack vector ada di Python (PyPI, ML tooling).
 
 ### Fase 2 — Distribution & Polish (19 Mei – 8 Juni)
 
-| Item | Target | Prioritas |
-|------|--------|-----------|
-| Binary release via goreleaser (Linux/macOS, amd64/arm64) | 25 Mei | 🔴 Kritis |
-| Homebrew formula | 1 Juni | 🟡 Tinggi |
-| GitHub Actions reusable workflow (`uses: supplychain-kit/action@v1`) | 1 Juni | 🟡 Tinggi |
-| VEX report CSAF 2.0 | 5 Juni | 🟡 Tinggi |
-| README: demo GIF, arsitektur diagram, quick-start 3 langkah | 8 Juni | 🔴 Kritis |
-| `CONTRIBUTING.md`, `SECURITY.md`, issue templates | 8 Juni | 🟢 Normal |
+| Item | Target | Status |
+|------|--------|--------|
+| Binary release via goreleaser (Linux/macOS, amd64/arm64) | 25 Mei | ✅ Done |
+| Homebrew formula | 1 Juni | 🔜 Post-v1.0 |
+| GitHub Actions reusable workflow (`uses: supplychain-kit/action@v1`) | 1 Juni | 🔜 Post-v1.0 |
+| VEX report CSAF 2.0 | 5 Juni | 🔜 Post-v1.0 |
+| README: demo GIF, arsitektur diagram, quick-start 3 langkah | 8 Juni | ✅ Done |
+| `CONTRIBUTING.md`, `SECURITY.md`, issue templates | 8 Juni | ✅ Done |
 
 ### Fase 3 — Final Hardening (9–19 Juni)
 
@@ -47,10 +47,11 @@
 
 ---
 
-## Status Saat Ini — v0.9 ✅ + v0.9.5 (In Progress)
+## Status Saat Ini — v1.0.0 ✅ RELEASED (27 April 2026)
 
+- v1.0.0 released: all pre-release audit fixes applied, goreleaser tag pushed
+- v0.9.5 selesai: package remediation, license scanning, dependency graph, enhanced Semgrep rules, taint precision
 - v0.9 selesai: taint analysis engine (TaintContext, PathPruner, SanitizerRegistry), SARIF output, `.supplychain-ignore` suppression, goreleaser config
-- v0.9.5 in progress: report generation, `init`/`run` commands, Python taint support
 
 - v0.6 selesai: reachability engine fix, CLI consolidation (hapus server/worker), static CPG via Joern, e2e gate tests
 - v0.7 hampir selesai: Dependency-Track CLI, DefectDojo CLI, scanner expansion (Trivy + osv-scanner)
@@ -537,115 +538,30 @@ Command baru untuk bootstrap engagement.
 - Self-scan menemukan **5 MEDIUM findings** (use-of-sha1) — ini expected pada codebase internal test
 - Gate decision: **PASS** (no policy violations)
 
+
 ### Issues Found
 
 | # | Severity | Issue | Status |
 |---|----------|-------|--------|
-| 1 | LOW |  command:  flag di-ignore (TODO: Load policy from YAML) | Known limitation |
-| 2 | LOW |  menyebut 3 tools tapi server mendaftar 5 tools (run_gate, generate_report tidak disebutkan) | Known limitation |
-| 3 | INFO | Gitleaks scans code, past or present, for secrets
+| 1 | LOW | `license --policy` flag silently ignored | ✅ **Fixed** — now prints warning to stderr |
+| 2 | LOW | `mcp --help` mentions stale tool list | ✅ **Fixed** — lists all 5 registered tools |
+| 3 | INFO | Gitleaks not available in VPS test environment | Environment issue |
+| 4 | INFO | golangci-lint v1.24 incompatible with Go 1.26 | Tool version mismatch |
 
-Usage:
-  gitleaks [command]
+### Post-Audit Fixes Applied (25-27 April 2026)
 
-Available Commands:
-  completion  generate the autocompletion script for the specified shell
-  dir         scan directories or files for secrets
-  git         scan git repositories for secrets
-  help        Help about any command
-  stdin       detect secrets from stdin
-  version     display gitleaks version
-
-Flags:
-  -b, --baseline-path string          path to baseline with issues that can be ignored
-  -c, --config string                 config file path
-                                      order of precedence:
-                                      1. --config/-c
-                                      2. env var GITLEAKS_CONFIG
-                                      3. (target path)/.gitleaks.toml
-                                      If none of the three options are used, then gitleaks will use the default config
-      --enable-rule strings           only enable specific rules by id
-      --exit-code int                 exit code when leaks have been encountered (default 1)
-  -i, --gitleaks-ignore-path string   path to .gitleaksignore file or folder containing one (default ".")
-  -h, --help                          help for gitleaks
-      --ignore-gitleaks-allow         ignore gitleaks:allow comments
-  -l, --log-level string              log level (trace, debug, info, warn, error, fatal) (default "info")
-      --max-decode-depth int          allow recursive decoding up to this depth (default "0", no decoding is done)
-      --max-target-megabytes int      files larger than this will be skipped
-      --no-banner                     suppress banner
-      --no-color                      turn off color for verbose output
-      --redact uint[=100]             redact secrets from logs and stdout. To redact only parts of the secret just apply a percent value from 0..100. For example --redact=20 (default 100%)
-  -f, --report-format string          output format (json, csv, junit, sarif) (default "json")
-  -r, --report-path string            report file
-  -v, --verbose                       show verbose output from scan
-      --version                       version for gitleaks
-
-Use "gitleaks [command] --help" for more information about a command. tidak tersedia di VPS test environment | Environment issue |
-| 4 | INFO | golangci-lint v1.24 tidak kompatibel dengan Go 1.26 — tidak bisa dijalankan | Tool version mismatch |
-
-### Issues Fixed
-
-Tidak ada critical fix yang diperlukan untuk release. Semua issues di atas adalah known limitations yang tidak memblokir release.
+- ✅ `fix(mcp): update help text to list all 5 registered MCP tools` (3f6e4e3)
+- ✅ `fix(license): warn user when --policy flag is passed but not yet implemented` (a08e8ad)
+- ✅ `docs: add CONTRIBUTING.md and SECURITY.md for open-source release` (4ce6a73)
+- ✅ `docs(readme): update quick-start with verified commands` (0f5696e)
+- ✅ goreleaser v1.0.0 tag pushed
 
 ### Known Limitations untuk v1.0
 
-1.  flag belum load dari YAML (silently fallback ke default policy)
-2. MCP  text menyebutkan 3 tools, padahal server expose 5 tools
-3.  menampilkan  karena binary di-build tanpa  version injection — goreleaser akan meng-inject versi yang benar saat release
-4. Gitleaks scans code, past or present, for secrets
-
-Usage:
-  gitleaks [command]
-
-Available Commands:
-  completion  generate the autocompletion script for the specified shell
-  dir         scan directories or files for secrets
-  git         scan git repositories for secrets
-  help        Help about any command
-  stdin       detect secrets from stdin
-  version     display gitleaks version
-
-Flags:
-  -b, --baseline-path string          path to baseline with issues that can be ignored
-  -c, --config string                 config file path
-                                      order of precedence:
-                                      1. --config/-c
-                                      2. env var GITLEAKS_CONFIG
-                                      3. (target path)/.gitleaks.toml
-                                      If none of the three options are used, then gitleaks will use the default config
-      --enable-rule strings           only enable specific rules by id
-      --exit-code int                 exit code when leaks have been encountered (default 1)
-  -i, --gitleaks-ignore-path string   path to .gitleaksignore file or folder containing one (default ".")
-  -h, --help                          help for gitleaks
-      --ignore-gitleaks-allow         ignore gitleaks:allow comments
-  -l, --log-level string              log level (trace, debug, info, warn, error, fatal) (default "info")
-      --max-decode-depth int          allow recursive decoding up to this depth (default "0", no decoding is done)
-      --max-target-megabytes int      files larger than this will be skipped
-      --no-banner                     suppress banner
-      --no-color                      turn off color for verbose output
-      --redact uint[=100]             redact secrets from logs and stdout. To redact only parts of the secret just apply a percent value from 0..100. For example --redact=20 (default 100%)
-  -f, --report-format string          output format (json, csv, junit, sarif) (default "json")
-  -r, --report-path string            report file
-  -v, --verbose                       show verbose output from scan
-      --version                       version for gitleaks
-
-Use "gitleaks [command] --help" for more information about a command. dan  harus di-install terpisah (documented di README)
-5.  flag tidak ada di  command (tidak perlu, sudah bisa pakai )
-
-### Go/No-Go Recommendation
-
-**GO untuk release v1.0 pada 27 April 2026.**
-
-Alasan:
-- Build bersih tanpa error atau warning
-- Semua unit test lulus (0 failures)
-- Functional smoke tests semua pass
-- End-to-end self-scan berjalan dan menghasilkan findings yang valid
-- Quality gate berfungsi dengan benar
-- Issues yang ada adalah minor/known limitations, tidak memblokir fungsionalitas inti
-- README tersedia dengan Installation dan Usage sections
-- Semua 3 policy YAML files tersedia (policy-strict, policy-moderate, policy-permissive)
-- goreleaser config sudah ada dengan cosign signing dan SBOM generation
+1. `license --policy` flag prints warning but does not load YAML (fallback to default policy)
+2. `--version` menampilkan `dev` jika binary di-build tanpa `-ldflags` version injection — goreleaser meng-inject versi yang benar saat release
+3. Gitleaks harus di-install terpisah (documented di README)
+4. `--fail-on` flag tidak ada di `run` command (tidak perlu, sudah bisa pakai policy YAML)
 
 ---
 

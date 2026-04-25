@@ -4,10 +4,8 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,7 +50,7 @@ func main() {
 		Short:   "Supply chain security scanner — SCA, SAST, secrets, quality gate, and report in one tool",
 		Version: version,
 	}
-	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), submitCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), reportCmd(), installHooksCmd())
+	root.AddCommand(runCmd(), scanCmd(), gateCmd(), sbomCmd(), engageCmd(), deptrackCmd(), defectdojoCmd(), mcpCmd(), initEngagementCmd(), reportCmd(), installHooksCmd())
 	root.AddCommand(remediateCmd(), licenseCmd(), graphCmd())
 	if err := root.Execute(); err != nil {
 		if fe, ok := err.(failOnError); ok {
@@ -609,30 +607,6 @@ func printGateResult(result quality.Result) {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "─────────────────────────────────────────\n\n")
-}
-
-func submitCmd() *cobra.Command {
-	var (
-		repo string
-		api  string
-	)
-	cmd := &cobra.Command{
-		Use:   "submit",
-		Short: "POST a scan request to a running aspm-api",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			body, _ := json.Marshal(map[string]string{"repo_url": repo, "trigger": "manual"})
-			resp, err := http.Post(api+"/api/v1/scans", "application/json", bytes.NewReader(body))
-			if err != nil {
-				return err
-			}
-			defer func() { _ = resp.Body.Close() }()
-			fmt.Println(resp.Status)
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&repo, "repo", "", "git repository URL")
-	cmd.Flags().StringVar(&api, "api", "http://localhost:8080", "aspm-api base URL")
-	return cmd
 }
 
 func sbomCmd() *cobra.Command {

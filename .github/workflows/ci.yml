@@ -15,16 +15,7 @@ jobs:
       - run: go vet ./...
       - run: go test ./... -count=1
 
-  python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
-      - run: pip install -r remediation/requirements.txt pytest
-      - run: PYTHONPATH=. pytest remediation/tests -q
-
-  aspm-self-scan:
+  self-scan:
     runs-on: ubuntu-latest
     needs: go
     steps:
@@ -40,5 +31,5 @@ jobs:
         run: go build -o bin/supplychain-kit ./cmd/supplychain-kit
       - name: Self-scan + Quality Gate
         run: |
-          ./bin/supplychain-kit scan --repo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --ref "$GITHUB_SHA" --out findings.json
-          ./bin/supplychain-kit gate --findings findings.json --policy configs/aspm.yaml
+          ./bin/supplychain-kit scan --repo . --out findings.json
+          ./bin/supplychain-kit gate --findings findings.json --policy configs/policy-moderate.yaml

@@ -64,7 +64,7 @@ fi
 echo ""
 echo "  Next steps:"
 echo "    supplychain-kit report --engagement <name> --format all"
-echo "    supplychain-kit analyze --findings results/<name>/findings/findings.json"
+echo "    supplychain-kit remediate results/<name>/findings/findings.json"
 echo "═══════════════════════════════════════════════"
 echo ""
 

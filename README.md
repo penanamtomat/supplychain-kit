@@ -1,8 +1,27 @@
 # supplychain-kit
 
+![Version](https://img.shields.io/github/v/release/penanamtomat/supplychain-kit?label=version)
+![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
+![Go](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go)
+
 > Open-source CLI for supply chain security — SCA, SAST, secret scanning, reachability analysis, and risk-aware quality gates in a single binary.
 
 Runs locally. No database, no Docker, no external services. One command to scan, score, and gate your project.
+
+---
+
+## How It Works
+
+| | Traditional Scanners | supplychain-kit |
+|---|---|---|
+| Vulnerability detection | Run grype/trivy, get list of CVEs | Run grype/trivy/osv-scanner, cross-reference with SBOM |
+| False positives | Alert on every CVE in dependencies | Trace user input → vulnerable code path via CPG taint analysis |
+| Risk prioritization | Sort by CVSS score | `CVSS × Reachability × Exposure × Criticality` |
+| Remediation | "Upgrade to version X" | Package-level guidance: P0 fix-now, upgrade commands, breaking notes |
+| Quality gate | Manual review of findings | Configurable pass/warn/fail policy with exit codes for CI |
+| Reporting | JSON output only | Markdown + DOCX reports with executive summary |
+| Suppression | Disable rules globally | `.supplychain-ignore` with CVE/rule/path/package granularity |
+| Claude Code | No integration | MCP server with 5 tools + orchestrator agent + knowledge base |
 
 ---
 
@@ -68,25 +87,22 @@ supplychain-kit report --engagement myapp-2026q1              # generate report
 
 ---
 
-## What It Does
+## Scanners
 
-| Step | Tool | Purpose |
-|------|------|---------|
-| SBOM generation | [Syft](https://github.com/anchore/syft) | CycloneDX 1.5 software bill of materials |
-| Vulnerability matching | [Grype](https://github.com/anchore/grype) | Match SBOM against CVE database |
-| Additional SCA | [Trivy](https://trivy.dev), [osv-scanner](https://google.github.io/osv-scanner/) | Extra vulnerability coverage |
-| SAST | [Semgrep](https://semgrep.dev) | Code vulnerability detection |
-| Secret scanning | [Gitleaks](https://github.com/gitleaks/gitleaks) | Hardcoded secrets and credentials |
-| Reachability | [Joern](https://joern.io) | Code Property Graph — is the CVE actually reachable? |
-| Taint analysis | Built-in | Trace user input to vulnerable sinks |
-| Risk scoring | Built-in | `CVSS × Reachability × Exposure × Criticality` |
-| Quality gate | Built-in | Pass/warn/fail with configurable policy |
+| Scanner | Type | Purpose |
+|---------|------|---------|
+| [Syft](https://github.com/anchore/syft) | SBOM | CycloneDX 1.5 software bill of materials |
+| [Grype](https://github.com/anchore/grype) | SCA | Match SBOM against CVE database |
+| [Trivy](https://trivy.dev) | SCA | Extra vulnerability coverage |
+| [osv-scanner](https://google.github.io/osv-scanner/) | SCA | OSV database matching |
+| [Semgrep](https://semgrep.dev) | SAST | Code vulnerability detection (32+ rules) |
+| [Gitleaks](https://github.com/gitleaks/gitleaks) | Secrets | Hardcoded secrets and credentials |
+| [Joern](https://joern.io) | CPG | Code Property Graph for reachability |
+| Built-in | Taint | Trace user input to vulnerable sinks |
+| Built-in | Scoring | `CVSS × Reachability × Exposure × Criticality` |
+| Built-in | Gate | Pass/warn/fail with configurable policy |
 
-**Key differentiator:** supplychain-kit doesn't just list CVEs — it traces whether user-controlled input can actually reach vulnerable code paths, reducing false positives by ~40%.
-
----
-
-## Scanner Modes
+### Scanner Modes
 
 | Mode | Scanners | What it finds |
 |------|----------|---------------|
@@ -111,6 +127,7 @@ supplychain-kit report --engagement myapp-2026q1              # generate report
 | `supplychain-kit license --engagement <name>` | Scan dependency licenses |
 | `supplychain-kit graph <findings.json>` | Dependency graph visualization |
 | `supplychain-kit mcp` | Start MCP server (for Claude Code) |
+| `supplychain-kit init <name> --repo <path>` | Bootstrap engagement directory |
 
 ---
 
@@ -221,26 +238,6 @@ supplychain-kit graph results/myapp/findings.json --format mermaid
 supplychain-kit graph results/myapp/findings.json --format dot
 ```
 
-### MCP Server (Claude Code)
-
-```bash
-# Start MCP server (stdio transport)
-supplychain-kit mcp
-
-# Print mcp.json registration snippet
-supplychain-kit mcp --print-config
-```
-
-Exposes 5 tools for Claude Code automation:
-
-| Tool | Purpose |
-|------|---------|
-| `init_engagement` | Bootstrap scan engagement |
-| `scan_repository` | Run full SCA + SAST + reachability pipeline |
-| `generate_sbom` | Generate CycloneDX SBOM via Syft |
-| `run_gate` | Evaluate findings against quality gate |
-| `generate_report` | Render findings to Markdown/DOCX report |
-
 ### Suppression (`.supplychain-ignore`)
 
 Suppress false positives with a `.supplychain-ignore` file in your project root:
@@ -258,28 +255,130 @@ semgrep.tainted-sql  path:internal/legacy/*.go
 
 ---
 
+## Claude Code Integration
+
+supplychain-kit runs as an MCP server inside Claude Code, providing an agentic security workflow with context-aware analysis.
+
+### Setup
+
+```bash
+# Register the MCP server
+supplychain-kit mcp --print-config
+# Paste output into ~/.claude/mcp.json
+```
+
+### Workflow
+
+When you use supplychain-kit in Claude Code, the orchestrator agent runs this pipeline:
+
+```
+Phase 1: Init       → Create engagement directory and state tracking
+Phase 2: SBOM       → Catalog components via syft (CycloneDX 1.5)
+Phase 3: Scan       → SCA + SAST + reachability analysis (7 scanners)
+Phase 4: Gate       → Evaluate findings against quality gate policy
+Phase 5: Analyze    → Context-aware triage using Claude + knowledge base
+Phase 6: Report     → Generate markdown report with remediation guidance
+```
+
+### MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `init_engagement` | Bootstrap scan engagement directory + state tracking |
+| `scan_repository` | Run full SCA + SAST + reachability pipeline |
+| `generate_sbom` | Generate CycloneDX SBOM via Syft |
+| `run_gate` | Evaluate findings against quality gate policy |
+| `generate_report` | Render findings to Markdown/DOCX report |
+
+### Knowledge Base
+
+The skill includes 7 domain-specific knowledge documents that give Claude context for triage decisions:
+
+| Document | Coverage |
+|----------|----------|
+| `supply-chain-attacks.md` | Dependency confusion, typosquatting, malicious injection, protestware patterns |
+| `cve-severity-guide.md` | CVSS scoring, reachability multipliers, risk score formula |
+| `remediation-by-ecosystem.md` | Fix commands for npm, pip, Go, Maven, Cargo, Ruby, Docker |
+| `sbom-formats.md` | CycloneDX vs SPDX, NTIA compliance, PURL identifiers |
+| `ci-integration-patterns.md` | GitHub Actions, GitLab CI, pre-commit hooks, ArgoCD patterns |
+| `ai-ml-supply-chain.md` | Model poisoning, PyPI risks, training pipeline attack surface |
+| `risk-scoring-explained.md` | Risk formula breakdown with worked examples |
+
+### Agents
+
+Two specialized agents coordinate the workflow:
+
+| Agent | Role |
+|-------|------|
+| **Orchestrator** | Coordinates full pipeline: Init → SBOM → Scan → Gate → Analyze → Report |
+| **Executor** | Domain-specific tasks: SCA grouping, SAST categorization, analysis prioritization |
+
+### Companion Skills (External)
+
+Extend supplychain-kit with Trail of Bits plugins:
+
+```bash
+# Maintainer risk analysis + takeover detection
+/plugin install trailofbits/skills/plugins/supply-chain-risk-auditor
+
+# CodeQL + Semgrep + SARIF multi-scanner triage
+/plugin install trailofbits/skills/plugins/static-analysis
+
+# Author custom Semgrep rules for project-specific patterns
+/plugin install trailofbits/skills/plugins/semgrep-rule-creator
+```
+
+| When to invoke | Plugin |
+|----------------|--------|
+| Suspicious packages found after scan | `supply-chain-risk-auditor` |
+| SAST findings need deeper triage | `static-analysis` |
+| Recurring vulnerability patterns | `semgrep-rule-creator` |
+
+### Reachability Priority Matrix
+
+Used by the executor agent to prioritize findings:
+
+| Reachability | Severity | Action |
+|---|---|---|
+| Reachable/Confirmed | Any | Fix now (P0) |
+| Unknown | Critical/High | Treat as reachable |
+| Unknown | Medium/Low | Next sprint |
+| Unreachable | Critical | Next sprint |
+| Unreachable | High or below | Monitor |
+
+---
+
 ## Project Structure
 
 ```
 supplychain-kit/
-├── cmd/supplychain-kit/     # CLI entry point
+├── cmd/supplychain-kit/     # CLI entry point (cobra commands)
 ├── internal/
 │   ├── config/              # Configuration (Viper)
 │   ├── correlation/         # Finding normalization and dedup
-│   ├── graph/               # Dependency graph visualization
+│   ├── graph/               # Dependency graph (DOT, Mermaid, ASCII)
 │   ├── license/             # License compliance scanning
-│   ├── mcp/                 # MCP server for Claude Code
+│   ├── mcp/                 # MCP server (5 tools, stdio transport)
 │   ├── models/              # Domain models (Finding, Asset, SBOM)
 │   ├── quality/             # Quality gate evaluator
 │   ├── reachability/        # CPG reachability engine (Joern)
 │   ├── remediation/pkg/     # Package-level remediation
-│   ├── report/              # Report generation
+│   ├── report/              # Report generation (Markdown + DOCX)
 │   ├── scanner/             # Scanner adapters (syft, grype, semgrep, joern, gitleaks, trivy, osv)
 │   ├── scoring/             # Risk score calculator
 │   ├── suppress/            # .supplychain-ignore suppression
-│   └── taint/               # Taint analysis engine
-├── configs/                 # Policies, semgrep rules, templates
-├── remediation/             # Python-based remediation (agents, reports)
+│   └── taint/               # Taint analysis engine (source detection, propagation, sink matching)
+├── configs/
+│   ├── policy-*.yaml        # Quality gate policies (strict, moderate, permissive)
+│   ├── semgrep-rules/       # Custom Semgrep rules (TypeScript + Python)
+│   ├── hooks/               # Git hooks (pre-commit gate, post-scan summary)
+│   └── report-templates/    # Markdown report templates
+├── .claude/
+│   ├── agents/              # Orchestrator + executor agents
+│   └── skills/supplychain-kit/
+│       ├── SKILL.md         # Skill definition
+│       └── knowledge/       # 7 domain knowledge documents
+├── remediation/             # Python-based remediation (agents, VEX reports)
 ├── docs/                    # PRD, development plan, architecture
 ├── scripts/                 # Developer helpers
 └── results/                 # Local scan output (gitignored)

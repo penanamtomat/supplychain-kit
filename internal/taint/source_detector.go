@@ -85,12 +85,39 @@ func (d *Detector) detectHTTPHandlers() []Source {
 
 		lower := strings.ToLower(name)
 		isHandler :=
+			// Go: net/http, gin, echo, fiber, chi
 			strings.Contains(lower, "handle") ||
 			strings.Contains(lower, "servehttp") ||
 			strings.Contains(lower, ".handler") ||
 			strings.Contains(lower, "handler.") ||
 			strings.Contains(lower, "controller.") ||
-			strings.Contains(lower, "endpoint.")
+			strings.Contains(lower, "endpoint.") ||
+			// Python: Flask route functions, FastAPI path operations
+			strings.Contains(lower, "flask.route") ||
+			strings.Contains(lower, "@app.route") ||
+			strings.Contains(lower, "@router.") ||
+			strings.Contains(lower, "view_func") ||
+			strings.Contains(lower, "dispatch_request") ||
+			strings.Contains(lower, "apiview.") ||
+			strings.Contains(lower, "viewset.") ||
+			strings.Contains(lower, "fastapi.get") ||
+			strings.Contains(lower, "fastapi.post") ||
+			strings.Contains(lower, "fastapi.put") ||
+			strings.Contains(lower, "fastapi.delete") ||
+			// JavaScript/TypeScript: Express, Fastify, Koa, NestJS
+			strings.Contains(lower, "router.get") ||
+			strings.Contains(lower, "router.post") ||
+			strings.Contains(lower, "router.put") ||
+			strings.Contains(lower, "router.delete") ||
+			strings.Contains(lower, "app.get(") ||
+			strings.Contains(lower, "app.post(") ||
+			strings.Contains(lower, "app.put(") ||
+			strings.Contains(lower, "app.delete(") ||
+			strings.Contains(lower, "@get(") ||
+			strings.Contains(lower, "@post(") ||
+			strings.Contains(lower, "@put(") ||
+			strings.Contains(lower, "@delete(") ||
+			strings.Contains(lower, "middleware")
 
 		if !isHandler {
 			continue
@@ -102,6 +129,14 @@ func (d *Detector) detectHTTPHandlers() []Source {
 		}
 		if strings.Contains(lower, "net/http") {
 			priority = 15
+		}
+		// Python frameworks
+		if strings.Contains(lower, "flask") || strings.Contains(lower, "fastapi") || strings.Contains(lower, "django") {
+			priority = 20
+		}
+		// JS frameworks
+		if strings.Contains(lower, "express") || strings.Contains(lower, "fastify") || strings.Contains(lower, "nestjs") {
+			priority = 18
 		}
 
 		sources = append(sources, Source{
@@ -142,7 +177,9 @@ func (d *Detector) isInputSource(name string) bool {
 		return false
 	}
 	lower := strings.ToLower(name)
-	return strings.Contains(lower, "context.query") ||
+
+	// Go: gin, echo, net/http
+	goSources := strings.Contains(lower, "context.query") ||
 		strings.Contains(lower, "context.param") ||
 		strings.Contains(lower, "context.bindjson") ||
 		strings.Contains(lower, "context.bind") ||
@@ -155,6 +192,51 @@ func (d *Detector) isInputSource(name string) bool {
 		strings.Contains(lower, "request.body") ||
 		strings.Contains(lower, "request.url") ||
 		strings.Contains(lower, "request.parseform")
+
+	// Python: Flask, FastAPI, Django
+	pythonSources := strings.Contains(lower, "request.args") ||
+		strings.Contains(lower, "request.form") ||
+		strings.Contains(lower, "request.json") ||
+		strings.Contains(lower, "request.get_json") ||
+		strings.Contains(lower, "request.data") ||
+		strings.Contains(lower, "request.files") ||
+		strings.Contains(lower, "request.cookies") ||
+		strings.Contains(lower, "request.values") ||
+		strings.Contains(lower, "request.get") ||
+		strings.Contains(lower, "request.post") ||
+		strings.Contains(lower, "fastapi.query") ||
+		strings.Contains(lower, "fastapi.body") ||
+		strings.Contains(lower, "fastapi.path") ||
+		strings.Contains(lower, "fastapi.form") ||
+		strings.Contains(lower, "depends(") ||
+		strings.Contains(lower, "annotated[") ||
+		strings.Contains(lower, "query(") ||
+		strings.Contains(lower, "body(") ||
+		strings.Contains(lower, "path(") ||
+		strings.Contains(lower, "django.http") ||
+		strings.Contains(lower, "request.meta") ||
+		strings.Contains(lower, "request.resolver_match")
+
+	// JavaScript/TypeScript: Express, Fastify, Koa, NestJS
+	jsSources := strings.Contains(lower, "req.body") ||
+		strings.Contains(lower, "req.query") ||
+		strings.Contains(lower, "req.params") ||
+		strings.Contains(lower, "req.headers") ||
+		strings.Contains(lower, "req.cookies") ||
+		strings.Contains(lower, "req.files") ||
+		strings.Contains(lower, "request.body") ||
+		strings.Contains(lower, "request.query") ||
+		strings.Contains(lower, "request.params") ||
+		strings.Contains(lower, "ctx.request") ||
+		strings.Contains(lower, "ctx.query") ||
+		strings.Contains(lower, "ctx.params") ||
+		strings.Contains(lower, "ctx.body") ||
+		strings.Contains(lower, "nestjs.body") ||
+		strings.Contains(lower, "@body()") ||
+		strings.Contains(lower, "@query()") ||
+		strings.Contains(lower, "@param(")
+
+	return goSources || pythonSources || jsSources
 }
 
 func (d *Detector) findCallsInMethods() map[string][]*reachability.Vertex {

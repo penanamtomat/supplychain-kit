@@ -8,7 +8,49 @@
 
 ---
 
-## Status Saat Ini — v0.7 (In Progress)
+## 🗓️ Roadmap ke Public Release — Target: 19 Juni 2026
+
+> 55 hari tersisa. Prioritas: polish yang sudah ada, selesaikan fitur kritis yang masih unchecked, siapkan distribusi dan dokumentasi.
+
+### Fase 1 — Engine Completion (26 Apr – 18 Mei)
+
+| Item | Target | Prioritas |
+|------|--------|-----------|
+| Report generation: Markdown + DOCX | 5 Mei | 🔴 Kritis |
+| `supplychain-kit init` + `run` one-liner | 5 Mei | 🔴 Kritis |
+| Python taint analysis (Joern Python frontend) | 12 Mei | 🔴 Kritis |
+| JavaScript/TypeScript taint support | 18 Mei | 🟡 Tinggi |
+| Two-tier agent architecture (orchestrator + executor) | 18 Mei | 🟡 Tinggi |
+
+**Alasan fase ini kritis:** Report generation + `run` one-liner adalah yang pertama dilihat user baru. Python taint adalah differentiator terkuat — mayoritas supply chain attack vector ada di Python (PyPI, ML tooling).
+
+### Fase 2 — Distribution & Polish (19 Mei – 8 Juni)
+
+| Item | Target | Prioritas |
+|------|--------|-----------|
+| Binary release via goreleaser (Linux/macOS, amd64/arm64) | 25 Mei | 🔴 Kritis |
+| Homebrew formula | 1 Juni | 🟡 Tinggi |
+| GitHub Actions reusable workflow (`uses: supplychain-kit/action@v1`) | 1 Juni | 🟡 Tinggi |
+| VEX report CSAF 2.0 | 5 Juni | 🟡 Tinggi |
+| README: demo GIF, arsitektur diagram, quick-start 3 langkah | 8 Juni | 🔴 Kritis |
+| `CONTRIBUTING.md`, `SECURITY.md`, issue templates | 8 Juni | 🟢 Normal |
+
+### Fase 3 — Final Hardening (9–19 Juni)
+
+| Item | Target | Prioritas |
+|------|--------|-----------|
+| Bug fix dari rc testing | 15 Juni | 🔴 Kritis |
+| Man page + `--help` yang informatif | 15 Juni | 🟢 Normal |
+| SLSA level check, NIST SSDF compliance output | 17 Juni | 🟡 Tinggi |
+| Full end-to-end demo test (real repo scan → report) | 18 Juni | 🔴 Kritis |
+| Tag `v1.0.0`, push goreleaser release | 19 Juni | 🔴 Kritis |
+
+---
+
+## Status Saat Ini — v0.9 ✅ + v0.9.5 (In Progress)
+
+- v0.9 selesai: taint analysis engine (TaintContext, PathPruner, SanitizerRegistry), SARIF output, `.supplychain-ignore` suppression, goreleaser config
+- v0.9.5 in progress: report generation, `init`/`run` commands, Python taint support
 
 - v0.6 selesai: reachability engine fix, CLI consolidation (hapus server/worker), static CPG via Joern, e2e gate tests
 - v0.7 hampir selesai: Dependency-Track CLI, DefectDojo CLI, scanner expansion (Trivy + osv-scanner)
@@ -196,9 +238,9 @@ Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pad
 
 **Tujuan:** `supplychain-kit` berjalan sepenuhnya sebagai agentic tool di dalam Claude Code — user cukup berikan engagement name dan path repo, Claude otomatis menjalankan seluruh pipeline scan, analisis, dan laporan. Cocok untuk semua persona: developer, security engineer, AI/ML engineer — baik yang sedang membangun product maupun yang sudah ship ke production.
 
-**Referensi desain:** Terinspirasi dari pentest-kit (BlackHat-level tool) dengan adaptasi ke domain supply chain: bukan active attack, tapi contextual risk analysis — "CVE ini di mana, seberapa bahaya untuk kode KAMU, dan bagaimana fix-nya."
+**Referensi desain:** Terinspirasi dari tooling pentest profesional dengan adaptasi ke domain supply chain: bukan active attack, tapi contextual risk analysis — "CVE ini di mana, seberapa bahaya untuk kode KAMU, dan bagaimana fix-nya."
 
-**Target publikasi:** BlackHat Europe (proposal level)
+**Target:** Public release v1.0 dengan distribusi komunitas open-source.
 
 **Catatan Penting:**
 - API remediation Claude terpisah (`--ai` flag) telah digantikan dengan template-based remediation (internal/remediation)
@@ -407,17 +449,97 @@ Command baru untuk bootstrap engagement (mirip `pentest-kit init`).
 
 ---
 
+## v0.9.5 — Report Generation + One-liner Workflow + Python Taint
+
+**Tujuan:** Lengkapi output pipeline (report) dan sederhanakan UX menjadi satu perintah. Tambah Python taint untuk menjangkau supply chain ML/AI.
+
+**Deadline fase ini: 18 Mei 2026**
+
+### Report Generation
+
+- [ ] `supplychain-kit report --engagement <name> --format markdown` — render per-finding Markdown
+- [ ] `supplychain-kit report --engagement <name> --format docx` — generate DOCX via Pandoc
+- [ ] `supplychain-kit report --engagement <name> --format all` — generate keduanya sekaligus
+- [ ] Template Markdown per finding (`configs/report-templates/finding.md.tmpl`):
+  ```
+  ## [SEVERITY] CVE-XXXX-XXXXX — <package> <version>
+  Affected:   <package> <version>
+  Reachable:  YES | NO | UNKNOWN — <taint path jika ada>
+  REMEDIATION:
+    Fix:      Upgrade <package> to ≥<fixed-version>
+    Command:  <exact command>
+    Verify:   <command untuk verifikasi>
+  ```
+- [ ] Template DOCX: cover page, executive summary, findings table, per-finding detail, appendix SBOM
+- [ ] Pandoc sebagai renderer DOCX — graceful degradation jika tidak terinstall
+
+### `supplychain-kit init` + `supplychain-kit run`
+
+- [ ] `supplychain-kit init <engagement> --repo <path> [--policy <preset>] [--out <dir>]`
+  - Buat struktur: `results/<engagement>/findings.json`, `sbom/`, `state.json`
+  - `state.json` track fase: Init → SBOM → SCA → SAST → Gate → Report
+- [ ] `supplychain-kit run <engagement> --repo <path> --mode all --policy moderate`
+  - One-liner yang menjalankan: init → sbom → scan → gate → report secara berurutan
+  - Progress output ke stderr, final summary ke stdout
+- [ ] `supplychain-kit status <engagement>` — tampilkan progress engagement
+
+### Python Taint Analysis
+
+- [ ] Aktifkan Joern Python frontend di source detector
+- [ ] Map Python HTTP framework sources: Flask `request.*`, FastAPI `Query()`/`Body()`, Django `request.GET`
+- [ ] Map Python sink patterns: `subprocess.run`, `eval`, `exec`, `pickle.loads`, `torch.load`, `yaml.load`
+- [ ] Test: fixture Flask app dengan known vulnerable pattern → detect taint path
+
+### JavaScript/TypeScript Taint (best effort)
+
+- [ ] Joern JS frontend integration
+- [ ] Source patterns: Express `req.body`, `req.query`, `req.params`
+- [ ] Sink patterns: `eval`, `child_process.exec`, `dangerouslySetInnerHTML`
+
+### Test
+
+- [ ] Test `init` command: verifikasi struktur direktori dan `state.json`
+- [ ] Test `run` command: end-to-end dengan mock scanners
+- [ ] Test `report` command: fixture findings → validate Markdown output
+- [ ] Test Python taint: fixture Flask app → confirmed_exploitable
+
+---
+
 ## v1.0 — Production CLI
 
-**Tujuan:** Stabil, terdokumentasi, siap digunakan komunitas.
+**Tujuan:** Stabil, terdokumentasi, siap digunakan komunitas luas.
 
-- [ ] Binary release via GitHub Releases (Linux/macOS/Windows, amd64/arm64)
-- [ ] Homebrew formula
-- [ ] Full documentation: README lengkap, man page, `--help` yang informatif
+**Deadline: 19 Juni 2026**
+
+### Distribution
+
+- [ ] Binary release via goreleaser — `.goreleaser.yaml` sudah ada, tinggal trigger
+  - Linux/macOS, amd64/arm64 (Windows via WSL)
+  - Cosign signing + SBOM per release (sudah di goreleaser config)
+- [ ] Homebrew formula: `brew tap penanamtomat/tap && brew install supplychain-kit`
+- [ ] GitHub Actions reusable workflow: `uses: penanamtomat/supplychain-kit/action@v1`
+  - Input: `repo-path`, `mode`, `policy`, `fail-on`
+  - Output: SARIF ke GitHub Security tab + summary comment di PR
+
+### Compliance & Security Posture
+
 - [ ] `supplychain-kit vex --tag v1.0.0` — VEX report CSAF 2.0
-- [ ] Compliance output: NIST SSDF, SLSA level check
-- [ ] `CONTRIBUTING.md`, `SECURITY.md`, issue templates
-- [ ] GitHub Actions reusable workflow: `uses: supplychain-kit/action@v1`
+- [ ] Compliance output: NIST SSDF mapping, SLSA level check
+- [ ] `supplychain-kit sign` — sign SBOM dengan cosign (sudah ada di goreleaser, expose ke CLI)
+
+### Documentation
+
+- [ ] README: demo GIF (asciinema), arsitektur diagram, quick-start 3 langkah
+- [ ] Man page (`docs/supplychain-kit.1`)
+- [ ] `--help` yang informatif: contoh command di setiap subcommand
+- [ ] `CONTRIBUTING.md`, `SECURITY.md`, issue + PR templates
+- [ ] `docs/ARCHITECTURE.md` — update diagram dengan komponen taint engine
+
+### Final Hardening
+
+- [ ] E2E demo test: scan real repo (supplychain-kit sendiri) → full report
+- [ ] Benchmark: waktu scan repo 100K LOC < 60 detik (tanpa Joern)
+- [ ] Tag `v1.0.0` + goreleaser release ke GitHub Releases
 
 ---
 

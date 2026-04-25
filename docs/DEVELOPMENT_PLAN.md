@@ -37,13 +37,13 @@
 
 ### Fase 3 — Final Hardening (9–19 Juni)
 
-| Item | Target | Prioritas |
-|------|--------|-----------|
-| Bug fix dari rc testing | 15 Juni | 🔴 Kritis |
-| Man page + `--help` yang informatif | 15 Juni | 🟢 Normal |
-| SLSA level check, NIST SSDF compliance output | 17 Juni | 🟡 Tinggi |
-| Full end-to-end demo test (real repo scan → report) | 18 Juni | 🔴 Kritis |
-| Tag `v1.0.0`, push goreleaser release | 19 Juni | 🔴 Kritis |
+| Item | Target | Status |
+|------|--------|--------|
+| Bug fix dari rc testing | 15 Juni | 🔜 Post-v1.0 |
+| Man page + `--help` yang informatif | 15 Juni | 🔜 Post-v1.0 |
+| SLSA level check, NIST SSDF compliance output | 17 Juni | 🔜 Post-v1.0 |
+| Full end-to-end demo test (real repo scan → report) | 18 Juni | 🔜 Post-v1.0 |
+| Tag `v1.0.0`, push goreleaser release | 19 Juni | ✅ Done (27 Apr) |
 
 ---
 

@@ -22,17 +22,21 @@ type Sink struct {
 
 // Matcher matches tainted data with vulnerable sink symbols.
 type Matcher struct {
-	cpg    *reachability.CPG
-	prop   *Propagator
-	sinks  []Sink
+	cpg      *reachability.CPG
+	prop     *Propagator
+	sinks    []Sink
+	taintCtx *TaintContext
+	pruner   *PathPruner
 }
 
 // NewMatcher creates a new sink matcher.
 func NewMatcher(cpg *reachability.CPG, sources []Source) *Matcher {
 	return &Matcher{
-		cpg:   cpg,
-		prop:  NewPropagator(cpg, sources),
-		sinks: []Sink{},
+		cpg:      cpg,
+		prop:     NewPropagator(cpg, sources),
+		sinks:    []Sink{},
+		taintCtx: NewTaintContext(),
+		pruner:   NewPathPruner(),
 	}
 }
 
@@ -183,7 +187,24 @@ func (m *Matcher) AnalyzeFinding(finding *models.Finding) MatchResult {
 	var bestResult MatchResult
 	for _, sink := range sinks {
 		result := m.matchSink(sink)
-		if result.Exploitable && result.Confidence > bestResult.Confidence {
+		if !result.Exploitable {
+			continue
+		}
+
+		// Prune paths that are too long or low-confidence
+		if m.pruner.ShouldPrunePath(result.TaintPath, result.Confidence) {
+			continue
+		}
+
+		// Skip if context analysis determines the flow is safe
+		if m.taintCtx.IsSafeByContext(sink.Symbol, sink.Symbol) {
+			continue
+		}
+
+		// Apply context-sensitive confidence adjustment
+		result.Confidence = m.taintCtx.ConfidenceAdjustment(result.Confidence, sink.Symbol, sink.Symbol)
+
+		if result.Confidence > bestResult.Confidence {
 			bestResult = result
 		}
 	}

@@ -253,15 +253,15 @@ Supply chain scanning adalah inti dari tools ini: siapa saja yang bergantung pad
 
 MCP adalah backbone utama v0.8. Semua otomasi Claude Code mengalir melalui ini.
 
-- [ ] `supplychain-kit mcp` — jalankan sebagai MCP server (stdio transport)
-- [ ] Tool `init_engagement` — buat engagement baru: nama, repo path, policy, output dir
-- [ ] Tool `scan_repository` — jalankan full pipeline scan (SCA + SAST + reachability), return structured findings
-- [ ] Tool `generate_sbom` — hasilkan SBOM dari repo (Syft), return path + summary
-- [ ] Tool `run_gate` — evaluasi findings terhadap policy, return pass/warn/fail + violations
+- [x] `supplychain-kit mcp` — jalankan sebagai MCP server (stdio transport) — `internal/mcp/server.go`
+- [x] Tool `init_engagement` — buat engagement baru: nama, repo path, policy, output dir
+- [x] Tool `scan_repository` — jalankan full pipeline scan (SCA + SAST + reachability), return structured findings
+- [x] Tool `generate_sbom` — hasilkan SBOM dari repo (Syft), return path + summary
+- [x] Tool `run_gate` — evaluasi findings terhadap policy, return pass/warn/fail + violations
 - [ ] Tool `analyze_finding` — kirim satu finding ke Claude API, terima AI explanation + remediation suggestion
-- [ ] Tool `generate_report` — render findings ke Markdown report, simpan ke engagement dir
-- [ ] Setiap tool return structured JSON: `{status, data, summary, errors}`
-- [ ] Registrasi otomatis: generate `~/.claude/mcp.json` snippet via `supplychain-kit mcp --print-config`
+- [x] Tool `generate_report` — render findings ke Markdown report, simpan ke engagement dir
+- [x] Setiap tool return structured JSON: `{status, data, summary, errors}`
+- [x] Registrasi otomatis: generate `~/.claude/mcp.json` snippet via `supplychain-kit mcp --print-config`
 
 ---
 
@@ -274,10 +274,7 @@ Mengikuti pola Orchestrator + Executor dari pentest-kit, diadaptasi ke supply ch
   - Jalankan fase secara berurutan via MCP tools: Init → SBOM → Scan → Gate → Analyze → Report
   - Monitor progress, handle error gracefully, ringkaskan hasil ke user
   - **Tidak pernah** jalankan binary langsung — semua via MCP tools
-- [ ] `.claude/agents/executor.md` — Executor agent: spesialis per domain
-  - SCA Executor: orchestrate syft → grype → trivy → osv-scanner
-  - SAST Executor: orchestrate semgrep + gitleaks + joern
-  - Analysis Executor: kirim findings ke Claude API untuk AI remediation
+- [ ] `.claude/agents/executor.md` — Executor agent: spesialis per domain (SCA, SAST, Analysis)
 
 ---
 
@@ -285,42 +282,36 @@ Mengikuti pola Orchestrator + Executor dari pentest-kit, diadaptasi ke supply ch
 
 Slash command yang mengaktifkan full agentic workflow dari Claude Code chat.
 
-- [ ] `.claude/skills/security-scan/SKILL.md` — entry point skill
-  - Prompt user untuk: engagement name, repo path, scan mode (`sca`/`sast`/`all`/`full`)
-  - Optional: policy preset (`strict`/`moderate`/`permissive`), output format
-  - Panggil Orchestrator agent, tampilkan progress live ke user
-  - Tampilkan summary report di akhir: total findings, top CVEs, gate result, path ke report
-- [ ] Onboarding flow mirip pentest-kit:
-  1. User: `/security-scan`
-  2. Skill tanya: engagement name? repo path? policy?
-  3. Claude jalankan full pipeline otomatis
-  4. User menunggu — Claude kirim progress update tiap fase
-  5. Hasil: formatted report + gate verdict + top-N AI remediation suggestions
+- [x] `.claude/skills/supplychain-kit/` — skill sudah terinstall dan berfungsi via `/supplychain-kit`
+  - [x] Prompt user untuk: engagement name, repo path, scan mode
+  - [x] Policy preset support
+  - [x] Summary report di akhir pipeline
+- [ ] Onboarding flow improvement — two-tier orchestrator/executor agent pattern
 
 ---
 
-### 4. Knowledge Base (Dynamic — `.claude/skills/security-scan/knowledge/`)
+### 4. Knowledge Base (Dynamic — `.claude/skills/supplychain-kit/knowledge/`)
 
 Knowledge base dinamis yang meningkat seiring perkembangan ancaman. Mencakup semua persona (developer, security engineer, AI/ML engineer).
 
-- [ ] `supply-chain-attacks.md` — pola serangan supply chain: dependency confusion, typosquatting, malicious package injection, protestware
-- [ ] `cve-severity-guide.md` — cara baca CVSS, kapan CVE kritis vs dapat ditoleransi, konteks reachability
-- [ ] `remediation-by-ecosystem.md` — playbook fix per ekosistem: npm (`npm audit fix`), pip (`pip-audit`), Go (`go get -u`), Maven, Cargo
-- [ ] `sbom-formats.md` — CycloneDX vs SPDX, kapan pakai mana, compliance context (NTIA, EO 14028)
-- [ ] `ci-integration-patterns.md` — cara pasang gate di GitHub Actions, GitLab CI, Jenkins, ArgoCD
-- [ ] `ai-ml-supply-chain.md` — risiko khusus AI/ML engineer: model poisoning via HuggingFace, malicious PyPI packages untuk ML tooling, dependency chain di training pipeline
-- [ ] `risk-scoring-explained.md` — penjelasan risk score supplychain-kit: CVSS × reachability × fix availability
+- [x] `supply-chain-attacks.md` — pola serangan supply chain: dependency confusion, typosquatting, malicious package injection, protestware
+- [x] `cve-severity-guide.md` — cara baca CVSS, kapan CVE kritis vs dapat ditoleransi, konteks reachability
+- [x] `remediation-by-ecosystem.md` — playbook fix per ekosistem: npm, pip, Go, Maven, Cargo
+- [x] `sbom-formats.md` — CycloneDX vs SPDX, kapan pakai mana, compliance context (NTIA, EO 14028)
+- [x] `ci-integration-patterns.md` — cara pasang gate di GitHub Actions, GitLab CI, Jenkins, ArgoCD
+- [x] `ai-ml-supply-chain.md` — risiko khusus AI/ML engineer: model poisoning, malicious PyPI, dependency chain
+- [x] `risk-scoring-explained.md` — penjelasan risk score supplychain-kit: CVSS × reachability × fix availability
 
 ---
 
 ### 5. `supplychain-kit init` Command
 
-Command baru untuk bootstrap engagement (mirip `pentest-kit init`).
+Command baru untuk bootstrap engagement.
 
-- [ ] `supplychain-kit init <engagement> --repo <path> [--policy <preset>] [--out <dir>]`
-- [ ] Buat struktur direktori: `results/<engagement>/findings.json`, `reports/`, `sbom/`, `state.json`
-- [ ] `state.json`: track fase yang sudah selesai (Init → SBOM → SCA → SAST → Gate → Report)
-- [ ] `supplychain-kit status <engagement>` — tampilkan progress engagement
+- [x] `supplychain-kit init <engagement> --repo <path> [--policy <preset>] [--out <dir>]`
+- [x] Buat struktur direktori: `results/<engagement>/findings/`, `reports/`, `sbom/`, `state.json`
+- [x] `state.json`: track fase yang sudah selesai (Init → SBOM → SCA → SAST → Gate → Report)
+- [ ] `supplychain-kit status <engagement>` — tampilkan progress engagement (engageStatusCmd ada, perlu wire ke state.json)
 
 ---
 
@@ -340,42 +331,23 @@ Command baru untuk bootstrap engagement (mirip `pentest-kit init`).
 
 ### 7. Report Generation (Markdown + DOCX)
 
-**Prinsip report:** Bahasa teknis penuh, remediation harus clear + actionable + lengkap. Target audience adalah engineer yang sudah paham CVE — bukan simplified, tapi informatif dan tidak ada yang perlu diasumsikan sendiri.
+**Prinsip report:** Bahasa teknis penuh, remediation harus clear + actionable + lengkap.
 
-- [ ] `supplychain-kit report --engagement <name> --format markdown` — render per-finding Markdown
-- [ ] `supplychain-kit report --engagement <name> --format docx` — generate DOCX via Pandoc
-- [ ] `supplychain-kit report --engagement <name> --format all` — generate keduanya sekaligus
-- [ ] Template Markdown per finding (`configs/report-templates/finding.md.tmpl`):
-  ```
-  ## [SEVERITY] CVE-XXXX-XXXXX — <package> <version>
-
-  Affected:     <package> <version>
-  Introduced:   <dependency chain>
-  CWE:          CWE-XXXX (<name>)
-  Reachable:    YES | NO | UNKNOWN — <call path jika reachable>
-  Exploit:      Public PoC available | No known exploit
-
-  REMEDIATION:
-    Fix:        Upgrade <package> to ≥<fixed-version>
-    Command:    <exact package manager command>
-    Breaking:   <none | describe breaking changes>
-    Verify:     <command untuk verifikasi setelah fix>
-
-  REFERENCES:
-    Advisory:   <URL>
-    NVD:        <URL>
-  ```
-- [ ] Template DOCX: cover page, executive summary (total findings per severity, gate verdict), findings table, per-finding detail, appendix SBOM
-- [ ] Pandoc sebagai renderer DOCX — tidak perlu library tambahan, sudah tersedia di mayoritas Linux/macOS
+- [x] `supplychain-kit report --engagement <name> --format markdown` — render per-finding Markdown
+- [x] `supplychain-kit report --engagement <name> --format docx` — generate DOCX via Pandoc
+- [x] `supplychain-kit report --engagement <name> --format all` — generate keduanya sekaligus
+- [x] Template Markdown per finding (`configs/report-templates/finding.md.tmpl`) — sudah ada
+- [x] Pandoc sebagai renderer DOCX dengan graceful degradation jika tidak terinstall
 - [ ] `supplychain-kit report --check-deps` — verifikasi Pandoc terinstall
+- [ ] Template DOCX cover page + appendix SBOM (saat ini hanya convert markdown ke docx)
 
 ---
 
 ### 8. Claude Code Hooks Templates
 
-- [ ] `configs/hooks/pre-commit.sh` — jalankan `supplychain-kit gate` sebelum commit, block jika Critical
-- [ ] `configs/hooks/post-scan.sh` — setelah scan, upload ke Dependency-Track (opsional)
-- [ ] `configs/hooks/claude-stop.sh` — hook untuk Claude Code `Stop` event: tampilkan summary engagement aktif
+- [x] `configs/hooks/pre-commit.sh` — jalankan `supplychain-kit gate` sebelum commit, block jika Critical
+- [x] `configs/hooks/post-scan.sh` — setelah scan, upload ke Dependency-Track (opsional)
+- [x] `configs/hooks/claude-stop.sh` — hook untuk Claude Code `Stop` event
 - [ ] Instruksi setup di README: cara register hook ke `.claude/settings.json`
 
 ---
@@ -429,9 +401,9 @@ Command baru untuk bootstrap engagement (mirip `pentest-kit init`).
 ### Multi-Language Support (bertahap)
 
 - [x] Go — via Joern Go frontend (sudah tersedia)
-- [ ] Python — via Joern Python frontend
-- [ ] JavaScript/TypeScript — via Joern JS frontend
-- [ ] Java — via Joern Java frontend
+- [x] Python — source detection untuk Flask/FastAPI/Django ditambahkan ke source_detector.go
+- [x] JavaScript/TypeScript — source detection untuk Express/Fastify/NestJS ditambahkan ke source_detector.go
+- [ ] Java — via Joern Java frontend (belum)
 
 ### Test
 
@@ -457,49 +429,37 @@ Command baru untuk bootstrap engagement (mirip `pentest-kit init`).
 
 ### Report Generation
 
-- [ ] `supplychain-kit report --engagement <name> --format markdown` — render per-finding Markdown
-- [ ] `supplychain-kit report --engagement <name> --format docx` — generate DOCX via Pandoc
-- [ ] `supplychain-kit report --engagement <name> --format all` — generate keduanya sekaligus
-- [ ] Template Markdown per finding (`configs/report-templates/finding.md.tmpl`):
-  ```
-  ## [SEVERITY] CVE-XXXX-XXXXX — <package> <version>
-  Affected:   <package> <version>
-  Reachable:  YES | NO | UNKNOWN — <taint path jika ada>
-  REMEDIATION:
-    Fix:      Upgrade <package> to ≥<fixed-version>
-    Command:  <exact command>
-    Verify:   <command untuk verifikasi>
-  ```
-- [ ] Template DOCX: cover page, executive summary, findings table, per-finding detail, appendix SBOM
-- [ ] Pandoc sebagai renderer DOCX — graceful degradation jika tidak terinstall
+- [x] `supplychain-kit report --engagement <name> --format markdown` — sudah implemented
+- [x] `supplychain-kit report --engagement <name> --format docx` — via Pandoc, sudah implemented
+- [x] `supplychain-kit report --engagement <name> --format all` — sudah implemented
+- [x] Template Markdown per finding (`configs/report-templates/finding.md.tmpl`) — sudah ada
+- [x] Pandoc sebagai renderer DOCX — graceful degradation jika tidak terinstall
+- [ ] Template cover page DOCX dan appendix SBOM
 
 ### `supplychain-kit init` + `supplychain-kit run`
 
-- [ ] `supplychain-kit init <engagement> --repo <path> [--policy <preset>] [--out <dir>]`
-  - Buat struktur: `results/<engagement>/findings.json`, `sbom/`, `state.json`
-  - `state.json` track fase: Init → SBOM → SCA → SAST → Gate → Report
-- [ ] `supplychain-kit run <engagement> --repo <path> --mode all --policy moderate`
-  - One-liner yang menjalankan: init → sbom → scan → gate → report secara berurutan
-  - Progress output ke stderr, final summary ke stdout
-- [ ] `supplychain-kit status <engagement>` — tampilkan progress engagement
+- [x] `supplychain-kit init <engagement> --repo <path> [--policy <preset>] [--out <dir>]` — sudah implemented
+  - [x] Buat struktur: `results/<engagement>/findings/`, `sbom/`, `reports/`, `state.json`
+  - [x] `state.json` track fase: Init → SBOM → SCA → SAST → Gate → Report
+- [x] `supplychain-kit run <engagement> --repo <path> --mode all` — sudah implemented sebagai one-liner
+  - [x] Pipeline: scan → gate → report dalam satu command
+  - [x] Progress output ke stderr, final summary ke stdout
+- [ ] `supplychain-kit status <engagement>` — wire ke state.json (engageStatusCmd ada tapi belum baca state.json)
 
 ### Python Taint Analysis
 
-- [ ] Aktifkan Joern Python frontend di source detector
-- [ ] Map Python HTTP framework sources: Flask `request.*`, FastAPI `Query()`/`Body()`, Django `request.GET`
-- [ ] Map Python sink patterns: `subprocess.run`, `eval`, `exec`, `pickle.loads`, `torch.load`, `yaml.load`
+- [x] Map Python HTTP framework sources: Flask `request.*`, FastAPI `Query()`/`Body()`, Django `request.GET/POST`
+- [ ] Map Python sink patterns di `SanitizerRegistry`: `subprocess.run`, `eval`, `exec`, `pickle.loads`, `torch.load`, `yaml.load` sebagai non-sanitizer (dangerous)
 - [ ] Test: fixture Flask app dengan known vulnerable pattern → detect taint path
 
-### JavaScript/TypeScript Taint (best effort)
+### JavaScript/TypeScript Taint
 
-- [ ] Joern JS frontend integration
-- [ ] Source patterns: Express `req.body`, `req.query`, `req.params`
-- [ ] Sink patterns: `eval`, `child_process.exec`, `dangerouslySetInnerHTML`
+- [x] Source patterns: Express `req.body`, `req.query`, `req.params` + NestJS decorators — ditambahkan ke source_detector.go
+- [ ] Sink patterns di SanitizerRegistry: `eval`, `child_process.exec`, `dangerouslySetInnerHTML`
 
 ### Test
 
 - [ ] Test `init` command: verifikasi struktur direktori dan `state.json`
-- [ ] Test `run` command: end-to-end dengan mock scanners
 - [ ] Test `report` command: fixture findings → validate Markdown output
 - [ ] Test Python taint: fixture Flask app → confirmed_exploitable
 
@@ -593,19 +553,7 @@ User: /security-scan
 ```
 
 _Pick any unchecked item, open an issue, and submit a PR to `dev`._
-	### 6. AI-Powered Remediation via Claude Code Session
 
-	- [ ] Tool `analyze_finding_claude` - kirim single finding ke Claude Code untuk analisis
-	- [ ] CLI flag `--use-session` - untuk memilih Claude Code session
-	- [ ] Session context: repo path, engagement, scan results terkirim ke Claude Code
-	- [ ] Prompt optimization: analisis findings dalam konteks session yang kaya
-	- [ ] Graceful degradation: jika Claude Code tidak tersedia, fallback ke template-based
-
-	**Catatan:** Fitur ini opsional untuk improvement masa depan. Default tetap gunakan template-based remediation.
-
-**Status v0.8:** SELESAI dengan catatan:
-- 76/474 item (~16%) dikerjakan sebelum selesai
-- Improvement session ini membantu menyelesaikan beberapa task
-- Sisa ~84% item untuk implementasi MCP Server dan improvement lainnya
+**Status v0.8:** Sebagian besar selesai — MCP server, knowledge base, skill, init command, report generation, hooks templates sudah implemented. Item yang masih pending: two-tier agent architecture, `analyze_finding` tool (AI via API), `status` command wire ke state.json.
 
 ---

@@ -293,24 +293,19 @@ func sanitizePath(path []string) []string {
 		return path
 	}
 
-	// Internal CPG markers to filter (case-sensitive)
-	internalMarkers := map[string]bool{
-		"RET":      true, // return value marker
-		"as":       true, // alias/type cast artifact
-		"<lambda>": true, // anonymous function marker
-		"<init>":   true, // constructor marker
-		"<clinit>": true, // class initializer marker
-		"<static>": true, // static initializer marker
-		"this":     true, // this reference (not a useful path element)
-	}
-
 	result := make([]string, 0, len(path))
 	for _, p := range path {
-		// Skip internal markers
-		if internalMarkers[p] {
+		// Skip exact internal markers
+		if p == "RET" || p == "as" || p == "this" {
 			continue
 		}
-		// Skip angle-bracket wrapped patterns (Joern internal nodes)
+		// Skip angle-bracket wrapped patterns and their compounds
+		// Matches: <lambda>, <init>, <lambda>1, <lambda>1:<lambda>2, program:<lambda>, etc.
+		if strings.Contains(p, "<lambda>") || strings.Contains(p, "<init>") ||
+		   strings.Contains(p, "<clinit>") || strings.Contains(p, "<static>") {
+			continue
+		}
+		// Skip pure angle-bracket wrapped nodes
 		if len(p) > 2 && p[0] == '<' && p[len(p)-1] == '>' {
 			continue
 		}

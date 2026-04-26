@@ -305,6 +305,16 @@ func TestSanitizePath(t *testing.T) {
 			expected: []string{"app.js::handler", "sink"},
 		},
 		{
+			name:     "remove compound lambda markers",
+			input:    []string{"app.js::handler", "app.js::handler:<lambda>1:<lambda>2", "sink"},
+			expected: []string{"app.js::handler", "sink"},
+		},
+		{
+			name:     "remove prefixed lambda markers",
+			input:    []string{"program:<lambda>1:<lambda>2", "sink"},
+			expected: []string{"sink"},
+		},
+		{
 			name:     "keep valid single letter vars",
 			input:    []string{"app.js::main", "i", "x", "process"},
 			expected: []string{"app.js::main", "i", "x", "process"},

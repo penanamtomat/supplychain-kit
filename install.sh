@@ -671,7 +671,7 @@ if [ -n "$_install_version" ]; then
       else
         _verify_cmd="sha256sum"
       fi
-      _expected="$(grep "${_archive}" "$_cs_file" | awk '{print $1}')"
+      _expected="$(grep " ${_archive}\$" "$_cs_file" | awk '{print $1}')"
       if [ -n "$_expected" ]; then
         _actual="$($_verify_cmd "$_archive_path" | awk '{print $1}')"
         if [ "$_expected" = "$_actual" ]; then

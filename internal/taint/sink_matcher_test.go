@@ -291,8 +291,8 @@ func TestUpdateFindingWithTaintResult_Exploitable(t *testing.T) {
 
 	UpdateFindingWithTaintResult(finding, result)
 
-	if finding.Reachability != models.ReachConfirmedExploit {
-		t.Errorf("Expected reachability %s, got %s", models.ReachConfirmedExploit, finding.Reachability)
+	if finding.Reachability != models.ReachReachable {
+		t.Errorf("Expected reachability %s, got %s", models.ReachReachable, finding.Reachability)
 	}
 	if finding.Confidence != 0.95 {
 		t.Errorf("Expected confidence 0.95, got %f", finding.Confidence)

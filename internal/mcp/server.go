@@ -517,7 +517,7 @@ func severityCounts(findings []*models.Finding) map[string]int {
 
 func reachabilityNote(r models.Reachability) string {
 	switch r {
-	case models.ReachReachable, models.ReachConfirmed:
+	case models.ReachReachable:
 		return "Fix segera. Prioritas 1 — vulnerable code path terekspos."
 	case models.ReachUnreachable:
 		return "Fix di sprint berikutnya — code path tidak terekspos di runtime."

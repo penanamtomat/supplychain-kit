@@ -148,13 +148,13 @@ func TestE2E_TaintAnalysis_ConfirmedExploitable(t *testing.T) {
 
 	engine.Analyze(findings)
 
-	// golang.org/x/crypto findings should be confirmed_exploitable
+	// golang.org/x/crypto findings should be reachable
 	// because ssh.InsecureIgnoreHostKey is called from HTTP handler
-	cryptoExploitable := 0
+	cryptoReachable := 0
 	for _, f := range findings {
 		if f.Package == "golang.org/x/crypto" {
-			if f.Reachability == models.ReachConfirmedExploit {
-				cryptoExploitable++
+			if f.Reachability == models.ReachReachable {
+				cryptoReachable++
 				if f.Confidence <= 0 {
 					t.Errorf("CVE %s: expected confidence > 0, got %f", f.RuleID, f.Confidence)
 				}
@@ -162,19 +162,19 @@ func TestE2E_TaintAnalysis_ConfirmedExploitable(t *testing.T) {
 					t.Errorf("CVE %s: expected non-empty taint path", f.RuleID)
 				}
 			} else {
-				t.Errorf("CVE %s: expected confirmed_exploitable, got %s", f.RuleID, f.Reachability)
+				t.Errorf("CVE %s: expected reachable, got %s", f.RuleID, f.Reachability)
 			}
 		}
 	}
-	if cryptoExploitable != 2 {
-		t.Errorf("Expected 2 crypto findings confirmed exploitable, got %d", cryptoExploitable)
+	if cryptoReachable != 2 {
+		t.Errorf("Expected 2 crypto findings reachable, got %d", cryptoReachable)
 	}
 
-	// golang.org/x/net should NOT be confirmed exploitable
+	// golang.org/x/net should NOT be reachable via taint
 	for _, f := range findings {
 		if f.Package == "golang.org/x/net" {
-			if f.Reachability == models.ReachConfirmedExploit {
-				t.Errorf("CVE %s: x/net should NOT be confirmed exploitable (not directly used)", f.RuleID)
+			if f.Reachability == models.ReachReachable {
+				t.Errorf("CVE %s: x/net should NOT be reachable (not directly used)", f.RuleID)
 			}
 		}
 	}
@@ -311,15 +311,15 @@ func TestE2E_FullScan_Output(t *testing.T) {
 		t.Fatal("Expected findings from full scan")
 	}
 
-	// Should have confirmed_exploitable findings
-	exploitableCount := 0
+	// Should have reachable findings (taint analysis set these)
+	reachableCount := 0
 	for _, f := range findings {
-		if f.Reachability == models.ReachConfirmedExploit {
-			exploitableCount++
+		if f.Reachability == models.ReachReachable {
+			reachableCount++
 		}
 	}
-	if exploitableCount == 0 {
-		t.Errorf("Expected at least 1 confirmed_exploitable finding, got 0 out of %d", len(findings))
+	if reachableCount == 0 {
+		t.Errorf("Expected at least 1 reachable finding, got 0 out of %d", len(findings))
 	}
 
 	// Should have unreachable findings for x/net

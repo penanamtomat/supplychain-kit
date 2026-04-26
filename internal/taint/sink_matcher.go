@@ -215,7 +215,7 @@ func (m *Matcher) AnalyzeFinding(finding *models.Finding) MatchResult {
 // UpdateFindingWithTaintResult modifies finding with taint analysis results.
 func UpdateFindingWithTaintResult(finding *models.Finding, result MatchResult) {
 	if result.Exploitable {
-		finding.Reachability = models.ReachConfirmedExploit
+		finding.Reachability = models.ReachReachable
 		finding.Confidence = result.Confidence
 
 		// Build taint path description

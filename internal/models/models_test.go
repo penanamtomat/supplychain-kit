@@ -61,7 +61,7 @@ func TestFindingSource_Constants(t *testing.T) {
 }
 
 func TestReachability_Constants(t *testing.T) {
-	states := []Reachability{ReachUnknown, ReachUnreachable, ReachReachable, ReachConfirmed}
+	states := []Reachability{ReachUnknown, ReachUnreachable, ReachReachable}
 	for _, r := range states {
 		if r == "" {
 			t.Errorf("Reachability constant %v is empty", r)

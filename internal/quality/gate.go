@@ -89,7 +89,7 @@ func matches(f *models.Finding, rule config.GateRule) bool {
 		return false
 	}
 	if rule.Reachable != nil {
-		isReachable := f.Reachability == models.ReachReachable || f.Reachability == models.ReachConfirmed
+		isReachable := f.Reachability == models.ReachReachable
 		if isReachable != *rule.Reachable {
 			return false
 		}

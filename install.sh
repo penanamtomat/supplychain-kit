@@ -240,13 +240,92 @@ download_extract() {
 
 anchore_install() {
   local tool="$1"
+  local version="${2:-}"
   local url="https://raw.githubusercontent.com/anchore/${tool}/main/install.sh"
-  echo "  Downloading official ${tool} installer..."
-  if curl -sSfL --retry 3 "$url" | sh -s -- -b "$INSTALL_DIR" 2>&1; then
+  local tmpdir
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' RETURN
+
+  local attempts=3
+  for i in $(seq 1 $attempts); do
+    echo "  Downloading ${tool} installer (attempt $i/$attempts)..."
+    if curl -sSfL --retry 2 --retry-delay 3 --connect-timeout 15 \
+         -o "${tmpdir}/${tool}_install.sh" "$url" 2>&1; then
+      echo "  Running ${tool} installer..."
+      if sh "${tmpdir}/${tool}_install.sh" -b "$INSTALL_DIR" ${version:+"$version"} 2>&1; then
+        rm -rf "$tmpdir"
+        trap - RETURN
+        return 0
+      fi
+    fi
+    [ "$i" -lt "$attempts" ] && sleep 5
+  done
+
+  warn "  Official installer failed for ${tool}, trying direct binary download..."
+  if anchore_direct_download "$tool" "$version"; then
+    rm -rf "$tmpdir"
+    trap - RETURN
     return 0
-  else
-    return 1
   fi
+
+  rm -rf "$tmpdir"
+  trap - RETURN
+  return 1
+}
+
+anchore_direct_download() {
+  local tool="$1"
+  local version="${2:-}"
+  local api_url="https://api.github.com/repos/anchore/${tool}/releases/latest"
+  local download_url asset_name tmpdir
+
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' RETURN
+
+  if [ -n "$version" ]; then
+    api_url="https://api.github.com/repos/anchore/${tool}/releases/tags/${version}"
+  fi
+
+  local release_json
+  release_json=$(curl -sSfL --retry 2 --connect-timeout 15 "$api_url" 2>&1) || {
+    warn "  Could not fetch ${tool} release info from GitHub API"
+    return 1
+  }
+
+  local tag
+  tag=$(echo "$release_json" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
+  [ -z "$tag" ] && { warn "  Could not determine ${tool} latest version"; return 1; }
+
+  local suffix="${OS}_${ARCH}"
+  asset_name="${tool}_${tag#v}_${suffix}.tar.gz"
+
+  local browser_url
+  browser_url=$(echo "$release_json" | grep -o "\"browser_download_url\": *\"${asset_name}\"" || true)
+  if [ -z "$browser_url" ]; then
+    browser_url=$(echo "$release_json" \
+      | grep "browser_download_url" \
+      | grep "${OS}" | grep "${ARCH}" \
+      | head -1 \
+      | sed 's/.*"browser_download_url": *"//;s/".*//')
+  fi
+  [ -z "$browser_url" ] && { warn "  No binary found for ${tool} on ${OS}/${ARCH}"; return 1; }
+
+  echo "  Downloading ${tool} ${tag} binary..."
+  if curl -sSfL --retry 2 --retry-delay 3 --connect-timeout 15 \
+       -o "${tmpdir}/${asset_name}" "$browser_url" 2>&1; then
+    if tar xzf "${tmpdir}/${asset_name}" -C "$tmpdir" 2>&1; then
+      local bin="${tmpdir}/${tool}"
+      [ -f "$bin" ] && chmod +x "$bin" && cp "$bin" "${INSTALL_DIR}/${tool}" && {
+        rm -rf "$tmpdir"
+        trap - RETURN
+        echo "  ${tool} ${tag} installed via direct download"
+        return 0
+      }
+    fi
+  fi
+
+  warn "  Direct download failed for ${tool}"
+  return 1
 }
 
 # ── step 1: prerequisites ─────────────────────────────────────────────────────
@@ -592,7 +671,7 @@ if [ -n "$_install_version" ]; then
       else
         _verify_cmd="sha256sum"
       fi
-      _expected="$(grep "${_archive}" "$_cs_file" | awk '{print $1}')"
+      _expected="$(grep " ${_archive}\$" "$_cs_file" | awk '{print $1}')"
       if [ -n "$_expected" ]; then
         _actual="$($_verify_cmd "$_archive_path" | awk '{print $1}')"
         if [ "$_expected" = "$_actual" ]; then

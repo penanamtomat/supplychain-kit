@@ -240,7 +240,7 @@ download_extract() {
 
 anchore_install() {
   local tool="$1"
-  local version="$2"
+  local version="${2:-}"
   local url="https://raw.githubusercontent.com/anchore/${tool}/main/install.sh"
   local tmpdir
   tmpdir=$(mktemp -d)
@@ -275,7 +275,7 @@ anchore_install() {
 
 anchore_direct_download() {
   local tool="$1"
-  local version="$2"
+  local version="${2:-}"
   local api_url="https://api.github.com/repos/anchore/${tool}/releases/latest"
   local download_url asset_name tmpdir
 

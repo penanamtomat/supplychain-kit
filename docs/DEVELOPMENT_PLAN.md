@@ -565,6 +565,113 @@ Command baru untuk bootstrap engagement.
 
 ---
 
+## v1.1 — Reachability Engine Refactor (Static Import Graph Analysis)
+
+**Prioritas: TINGGI — wajib selesai sebelum Black Hat Europe Arsenal submission (deadline 19 Juni 2026)**
+
+**Latar belakang keputusan:**
+Audit empiris terhadap hasil scan repo `gper00/lostpeople` (Node.js app) menunjukkan **~60% false positive** pada findings berlabel `confirmed_exploitable`. Akar masalah: Joern CPG mengklasifikasikan sebuah package sebagai `confirmed_exploitable` hanya karena ada path di CPG dari controller ke package — bukan karena kode aplikasi benar-benar memanggil fungsi vulnerable. Joern tidak bisa membedakan runtime dep vs install-time dep, dan tidak bisa membedakan direct usage vs transitive dep yang tidak pernah dipanggil. Selain itu, Joern membutuhkan JVM — bertentangan dengan prinsip single binary zero infrastructure.
+
+**Keputusan arsitektur:**
+Ganti Joern CPG dengan **Static Import Graph Analysis** yang diimplementasi native di Go. Teknik ini deterministik penuh: input sama → output sama. Tidak ada model, tidak ada JVM, tidak ada eBPF, tidak ada external service.
+
+**Output reachability yang diizinkan (hanya 3 nilai):**
+
+| Nilai | Artinya | Syarat |
+|---|---|---|
+| `reachable` | Fungsi vulnerable dipanggil dari production code | Symbol ditemukan di Layer 3 |
+| `unreachable` | Package dev-only ATAU tidak pernah diimport di production code | Terbukti di Layer 1 atau Layer 2 |
+| `unknown` | Package diimport tapi symbol tidak bisa di-resolve | Layer 3 tidak bisa conclusive |
+
+Tidak ada lagi `confirmed_exploitable` tanpa bukti yang bisa diaudit.
+
+---
+
+### Arsitektur 3 Layer
+
+```
+Layer 1 — Dependency Scope Classification
+  Input:  manifest file (package.json / pyproject.toml / go.mod / pom.xml / dll)
+  Output: { package → runtime | devonly | transitive-from-dev }
+  Aturan: devDependency atau transitive dari devDep → langsung "unreachable"
+
+Layer 2 — Import/Require Tracing
+  Input:  semua production source files (exclude test/, *_test.go, *.test.js, dll)
+  Output: { package → imported | not-imported }
+  Teknik: AST parsing atau regex per bahasa
+  Aturan: tidak pernah diimport di production code → "unreachable"
+
+Layer 3 — Vulnerable Symbol Call Check
+  Input:  CVE affected function symbols dari Grype/OSV advisory metadata
+  Output: { package → symbol-called | symbol-not-called | unknown }
+  Teknik: AST traversal atau regex untuk function call detection
+  Aturan:
+    symbol dipanggil          → "reachable" (confidence 0.9)
+    symbol tidak dipanggil    → "unreachable" (confidence 0.8)
+    symbol tidak bisa resolve → "unknown"    (confidence 0.0)
+```
+
+---
+
+### Phase A — JavaScript/Node.js + Python (sebelum 19 Juni 2026)
+
+**JavaScript/Node.js:**
+
+- [ ] `internal/reachability/js/manifest.go` — parse `package.json`: pisahkan `dependencies` vs `devDependencies`, trace transitive chain dari `package-lock.json`
+- [ ] `internal/reachability/js/importer.go` — scan `.js`/`.ts` files (exclude `*.test.js`, `*.spec.js`, `__tests__/`, `node_modules/`), detect `require('pkg')` dan `import ... from 'pkg'`
+- [ ] `internal/reachability/js/callcheck.go` — untuk package yang diimport, cek apakah affected function symbol dari CVE advisory dipanggil di source files
+- [ ] Hapus ketergantungan pada Joern di path JS: ganti `internal/scanner/joern/` adapter dengan new engine untuk SCA reachability
+- [ ] Pertahankan Joern hanya untuk SAST taint analysis (use case berbeda, tetap valid)
+
+**Python:**
+
+- [ ] `internal/reachability/python/manifest.go` — parse `pyproject.toml` ([dev-dependencies]), `Pipfile` ([dev-packages]), `requirements-dev.txt` vs `requirements.txt`; fallback: jika hanya ada plain `requirements.txt` tanpa dev split, semua dianggap runtime (conservative)
+- [ ] `internal/reachability/python/importer.go` — scan `.py` files (exclude `test_*.py`, `*_test.py`, `tests/`, `conftest.py`), detect `import pkg` dan `from pkg import x`
+- [ ] `internal/reachability/python/callcheck.go` — symbol call detection dengan AST parse via `python3 -c` shell-out atau regex fallback
+
+**Interface bersama:**
+
+- [ ] `internal/reachability/engine.go` — refactor interface `ReachabilityEngine` untuk mendukung pluggable per-ecosystem analyzer
+- [ ] `internal/reachability/result.go` — hapus `confirmed_exploitable` dari model; hanya `reachable`, `unreachable`, `unknown`
+- [ ] Update `internal/models/finding.go` — update `Reachability` enum, hapus `ReachConfirmedExploit`
+- [ ] Update scoring: `reachable` → multiplier 1.0, `unreachable` → 0.1, `unknown` → 0.5 (conservative)
+- [ ] Update report templates: hapus referensi `confirmed_exploitable`, update remediation priority logic
+
+**Test:**
+
+- [ ] Test JS: scan `gper00/lostpeople` → lodash, tar, minimatch harus `unreachable`; multer harus `reachable`
+- [ ] Test Python: scan `penanamtomat/PhishScamSense` → verifikasi reachability tidak lagi semua `unknown`
+- [ ] Test unit per layer: fixture manifest + fixture source files → verify per layer output
+- [ ] Benchmark: full scan repo 1K deps < 30 detik (tanpa JVM warmup)
+
+---
+
+### Phase B — Go + Java (post-Arsenal, v1.1 lanjutan)
+
+**Go (via govulncheck adapter):**
+
+- [ ] `internal/reachability/golang/govulncheck.go` — shell-out ke `govulncheck ./...`, parse JSON output
+- [ ] Map govulncheck findings ke internal `ReachabilityResult` struct
+- [ ] Graceful degradation: jika govulncheck tidak tersedia, fallback ke Layer 1+2 saja
+- [ ] Layer 1 tetap diimplementasi dari `go.mod` parsing: `// indirect` deps di-mark sebagai transitive
+
+**Java/Maven + Gradle:**
+
+- [ ] `internal/reachability/java/manifest.go` — parse `pom.xml` (`<scope>test</scope>`, `<scope>provided</scope>`) dan `build.gradle` (`testImplementation` vs `implementation`)
+- [ ] `internal/reachability/java/importer.go` — scan `.java` files (exclude `src/test/`, `*Test.java`), detect `import com.company.Class`
+
+---
+
+### Ekosistem Roadmap (v1.2+)
+
+| Ekosistem | Manifest | Layer 1 Signal | Status |
+|---|---|---|---|
+| Rust (Cargo) | `Cargo.toml` | `[dev-dependencies]` vs `[dependencies]` | v1.2 |
+| Ruby (Bundler) | `Gemfile` | `group :development, :test do` | v1.2 |
+| PHP (Composer) | `composer.json` | `require-dev` vs `require` | v1.3 |
+
+---
+
 ## Catatan Pengembangan
 
 **Prinsip CLI-Only:**
@@ -576,8 +683,18 @@ Command baru untuk bootstrap engagement.
 
 **Urutan prioritas engine:**
 ```
-SCA (syft→grype→trivy→osv) → SAST (semgrep+gitleaks+joern) → Gate → Reachability → Dep Tracking → Claude Code MCP → AI Remediation
+SCA (syft→grype→trivy→osv) → SAST (semgrep+gitleaks) → Gate → Reachability (Static Import Graph) → Dep Tracking → Claude Code MCP → AI Remediation
 ```
+
+**Reachability engine (v1.1+):**
+- Joern CPG **tidak lagi digunakan untuk SCA reachability** — terbukti ~60% false positive dari audit empiris (audit April 2026, repo lostpeople)
+- Joern tetap dipertahankan hanya untuk SAST taint analysis (use case berbeda, valid)
+- Pengganti: Static Import Graph Analysis, 3 layer, native Go, zero external dependency
+- Layer 1 (manifest scope) → Layer 2 (import tracing) → Layer 3 (symbol call check)
+- Output hanya 3 nilai: `reachable` | `unreachable` | `unknown` — tidak ada `confirmed_exploitable`
+- Ekosistem v1.1 Phase A: JavaScript/Node.js + Python
+- Ekosistem v1.1 Phase B: Go (via govulncheck adapter) + Java
+- Ekosistem v1.2+: Rust, Ruby, PHP
 
 **Mode operasi yang didukung:**
 

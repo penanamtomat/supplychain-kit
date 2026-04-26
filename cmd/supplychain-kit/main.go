@@ -39,6 +39,8 @@ import (
 	trivyadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/trivy"
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
 	"github.com/penanamtomat/supplychain-kit/internal/taint"
+	reachjsanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/js"
+	reachpyanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/python"
 )
 
 // version is set at build time: go build -ldflags "-X main.version=$(git describe --tags --always)"
@@ -191,7 +193,7 @@ Target:
 			if artifacts != nil {
 				cpgPath = artifacts[joern.ArtifactCPGPath]
 			}
-			reach := reachability.New()
+			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer())
 			if err := reach.Analyze(cmd.Context(), asset.ID, repo, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
 			}
@@ -838,7 +840,7 @@ Examples:
 			if artifacts != nil {
 				cpgPath = artifacts[joern.ArtifactCPGPath]
 			}
-			reach := reachability.New()
+			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer())
 			if err := reach.Analyze(cmd.Context(), asset.ID, repo, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
 			}

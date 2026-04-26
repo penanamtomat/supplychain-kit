@@ -92,14 +92,13 @@ const (
 )
 
 // Reachability indicates whether the vulnerable code is exercised.
+// Only three values are permitted by the v1.1 Static Import Graph engine.
 type Reachability string
 
 const (
-	ReachUnknown         Reachability = "unknown"
-	ReachUnreachable     Reachability = "unreachable"
-	ReachReachable       Reachability = "reachable"
-	ReachConfirmed       Reachability = "runtime_confirmed"
-	ReachConfirmedExploit Reachability = "confirmed_exploitable"
+	ReachUnknown     Reachability = "unknown"     // imported but symbol not resolvable
+	ReachUnreachable Reachability = "unreachable" // dev-only dep or never imported in production
+	ReachReachable   Reachability = "reachable"   // vulnerable symbol called, evidence at file:line
 )
 
 // VEXStatus aligns with CSAF 2.0 (Profile 5) status values.

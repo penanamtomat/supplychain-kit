@@ -39,12 +39,10 @@ func reachabilityFactor(r models.Reachability) float64 {
 	switch r {
 	case models.ReachUnreachable:
 		return 0.1
-	case models.ReachReachable, models.ReachConfirmed:
+	case models.ReachReachable:
 		return 1.0
-	default:
-		// Unknown reachability gets a conservative middle factor so we
-		// neither suppress real risk nor amplify dead code.
-		return 0.7
+	default: // ReachUnknown
+		return 0.5
 	}
 }
 

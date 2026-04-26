@@ -231,7 +231,7 @@ func buildMessage(f *models.Finding) string {
 	if f.FixedVersion != "" {
 		parts = append(parts, "(fixed in "+f.FixedVersion+")")
 	}
-	if f.Reachability == models.ReachReachable || f.Reachability == models.ReachConfirmed {
+	if f.Reachability == models.ReachReachable {
 		parts = append(parts, "["+string(f.Reachability)+"]")
 	}
 	if len(parts) == 0 {

@@ -1,6 +1,13 @@
-// Package reachability decides whether each Grype/SCA finding is exercised
-// by first-party code (static analysis over a Joern CPG export) and, when
-// available, confirms reachability via eBPF runtime telemetry.
+// Package reachability decides whether each SCA finding is exercised by
+// first-party code, using a 3-layer Static Import Graph Analysis engine.
+//
+// Layer 1 — Dependency Scope Classification (manifest parsing)
+// Layer 2 — Import/Require Tracing (production files only)
+// Layer 3 — Vulnerable Symbol Call Check (CVE advisory metadata)
+//
+// Joern CPG is intentionally NOT used for SCA reachability (empirical audit
+// on gper00/lostpeople showed ~60% false positive rate). CPG types are kept
+// in this package because internal/taint still uses them for SAST taint analysis.
 package reachability
 
 import (
@@ -16,74 +23,138 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 )
 
+// Result is the output of a ReachabilityAnalyzer for a single finding.
+type Result struct {
+	Status     models.Reachability
+	Confidence float64
+	Evidence   string // file:line where symbol is called, or reason for unreachable
+}
+
+// ReachabilityAnalyzer is a pluggable per-ecosystem static import graph analyzer.
+// Implementations live in internal/reachability/<ecosystem>/.
+type ReachabilityAnalyzer interface {
+	// Ecosystem returns the ecosystem identifier this analyzer handles
+	// (e.g. "npm", "pypi", "golang", "maven").
+	Ecosystem() string
+
+	// Analyze runs the 3-layer static import graph analysis for a single SCA
+	// finding. repoPath is the absolute path to the repository root.
+	Analyze(ctx context.Context, repoPath string, finding *models.Finding) (Result, error)
+}
+
+// Engine dispatches SCA findings to per-ecosystem ReachabilityAnalyzers and
+// handles first-party SAST findings directly.
 type Engine struct {
-	runtime RuntimeConfirmer
+	analyzers map[string]ReachabilityAnalyzer
 }
 
-type RuntimeConfirmer interface {
-	IsLoaded(ctx context.Context, assetID, pkg string) (bool, error)
-}
-
-func New(rt RuntimeConfirmer) *Engine {
-	return &Engine{runtime: rt}
-}
-
-func (e *Engine) Analyze(ctx context.Context, assetID, cpgPath string, findings []*models.Finding) error {
-	var cpg *CPG
-	var err error
-
-	if cpgPath != "" {
-		log.Info().Str("cpg_path", cpgPath).Msg("reachability: loading CPG")
-		cpg, err = LoadCPG(cpgPath)
-		if err != nil {
-			log.Warn().Err(err).Str("cpg_path", cpgPath).Msg("reachability: failed to load CPG, using UNKNOWN for all findings")
-			cpg = nil
-		} else {
-			log.Info().Int("vertices", len(cpg.Vertices)).Int("edges", len(cpg.Edges)).Msg("reachability: CPG loaded successfully")
+// New returns an Engine with the provided analyzers registered.
+// Pass nil or an empty slice to get a no-op engine (all SCA findings → unknown).
+func New(analyzers ...ReachabilityAnalyzer) *Engine {
+	e := &Engine{analyzers: make(map[string]ReachabilityAnalyzer)}
+	for _, a := range analyzers {
+		if a != nil {
+			e.analyzers[a.Ecosystem()] = a
 		}
-	} else {
-		log.Warn().Msg("reachability: no CPG path provided, using UNKNOWN for all findings")
 	}
+	return e
+}
 
+// RegisterAnalyzer adds or replaces the analyzer for an ecosystem at runtime.
+func (e *Engine) RegisterAnalyzer(a ReachabilityAnalyzer) {
+	if a != nil {
+		e.analyzers[a.Ecosystem()] = a
+	}
+}
+
+// Analyze runs reachability analysis for every finding concurrently.
+// repoPath is passed to ecosystem analyzers; cpgPath is kept for compatibility
+// with call sites but is no longer used for SCA reachability (CPG is SAST-only).
+func (e *Engine) Analyze(ctx context.Context, assetID, repoPath string, findings []*models.Finding) error {
 	var wg sync.WaitGroup
 	for _, f := range findings {
 		wg.Add(1)
 		go func(finding *models.Finding) {
 			defer wg.Done()
-			e.analyzeFinding(ctx, assetID, cpg, finding)
+			e.analyzeFinding(ctx, repoPath, finding)
 		}(f)
 	}
 	wg.Wait()
 	return nil
 }
 
-func (e *Engine) analyzeFinding(ctx context.Context, assetID string, cpg *CPG, f *models.Finding) {
+func (e *Engine) analyzeFinding(ctx context.Context, repoPath string, f *models.Finding) {
+	// SAST / first-party findings are always reachable — the scanner found a
+	// real code path, no further import tracing needed.
 	if isFirstParty(f) {
-		if f.Reachability == "" || f.Reachability == models.ReachUnknown {
-			f.Reachability = models.ReachReachable
-			f.Confidence = 1.0
-			log.Debug().Str("rule_id", f.RuleID).Msg("reachability: first-party finding marked as REACHABLE")
-		}
+		f.Reachability = models.ReachReachable
+		f.Confidence = 1.0
+		log.Debug().Str("rule_id", f.RuleID).Msg("reachability: first-party finding marked as REACHABLE")
 		return
 	}
 
-	if cpg != nil {
-		e.analyzeWithCPG(cpg, f)
-	} else {
+	// SCA findings: delegate to the registered ecosystem analyzer.
+	ecosystem := detectEcosystem(f)
+	analyzer, ok := e.analyzers[ecosystem]
+	if !ok {
 		f.Reachability = models.ReachUnknown
 		f.Confidence = 0.0
-		log.Debug().Str("rule_id", f.RuleID).Str("package", f.Package).Msg("reachability: no CPG available, marked as UNKNOWN")
+		log.Debug().Str("rule_id", f.RuleID).Str("pkg", f.Package).Str("ecosystem", ecosystem).
+			Msg("reachability: no analyzer registered for ecosystem, marked as UNKNOWN")
+		return
 	}
 
-	if e.runtime != nil && f.Package != "" {
-		loaded, err := e.runtime.IsLoaded(ctx, assetID, f.Package)
-		if err == nil && loaded {
-			f.Reachability = models.ReachConfirmed
-			f.Confidence = 1.0
-		}
+	result, err := analyzer.Analyze(ctx, repoPath, f)
+	if err != nil {
+		log.Warn().Err(err).Str("rule_id", f.RuleID).Str("pkg", f.Package).
+			Msg("reachability: analyzer error, falling back to UNKNOWN")
+		f.Reachability = models.ReachUnknown
+		f.Confidence = 0.0
+		return
 	}
+
+	f.Reachability = result.Status
+	f.Confidence = result.Confidence
+	if result.Evidence != "" {
+		f.Path = []string{result.Evidence}
+	}
+	log.Debug().Str("rule_id", f.RuleID).Str("pkg", f.Package).
+		Str("status", string(result.Status)).Float64("confidence", result.Confidence).
+		Msg("reachability: analyzer result")
 }
 
+// detectEcosystem infers the ecosystem from the finding's package purl or name.
+// Returns a best-effort string; callers must tolerate "unknown".
+func detectEcosystem(f *models.Finding) string {
+	pkg := f.Package
+	if pkg == "" {
+		return "unknown"
+	}
+	// purl format: pkg:<type>/<namespace>/<name>@<version>
+	if strings.HasPrefix(pkg, "pkg:npm") {
+		return "npm"
+	}
+	if strings.HasPrefix(pkg, "pkg:pypi") {
+		return "pypi"
+	}
+	if strings.HasPrefix(pkg, "pkg:golang") {
+		return "golang"
+	}
+	if strings.HasPrefix(pkg, "pkg:maven") {
+		return "maven"
+	}
+	if strings.HasPrefix(pkg, "pkg:cargo") {
+		return "cargo"
+	}
+	// Heuristic for bare package names (non-purl findings from grype).
+	if strings.Contains(pkg, "github.com") || strings.Contains(pkg, "golang.org") || strings.Contains(pkg, "go.uber.org") {
+		return "golang"
+	}
+	return "unknown"
+}
+
+// analyzeWithCPG is kept for internal/taint SAST taint analysis. It is NOT
+// called during normal SCA reachability evaluation.
 func (e *Engine) analyzeWithCPG(cpg *CPG, f *models.Finding) {
 	vulnerableSymbol := extractVulnerableSymbol(f)
 	analysis := cpg.FindPathToSink(vulnerableSymbol, f.Package)
@@ -92,14 +163,16 @@ func (e *Engine) analyzeWithCPG(cpg *CPG, f *models.Finding) {
 		f.Reachability = models.ReachReachable
 		f.Confidence = analysis.Confidence
 		f.Path = analysis.Path
-		log.Debug().Str("rule_id", f.RuleID).Str("package", f.Package).Float64("confidence", analysis.Confidence).Msg("reachability: path found to vulnerable symbol")
 	} else {
 		f.Reachability = models.ReachUnreachable
 		f.Confidence = analysis.Confidence
 		f.Path = []string{}
-		log.Debug().Str("rule_id", f.RuleID).Str("package", f.Package).Msg("reachability: no path found, marked as UNREACHABLE")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CPG types — used by internal/taint for SAST taint analysis (not SCA).
+// ---------------------------------------------------------------------------
 
 type CPG struct {
 	Vertices []*Vertex
@@ -137,8 +210,6 @@ func LoadCPG(path string) (*CPG, error) {
 	var raw []byte
 
 	if info.IsDir() {
-		// Joern graphson export creates a directory.
-		// Prefer single export.json; fall back to separate ~1/~2 files.
 		exportFile := filepath.Join(path, "export.json")
 		if f, ferr := os.Stat(exportFile); ferr == nil && !f.IsDir() {
 			raw, err = os.ReadFile(exportFile)
@@ -156,7 +227,6 @@ func LoadCPG(path string) (*CPG, error) {
 			if eerr != nil {
 				return nil, fmt.Errorf("read edges file: %w", eerr)
 			}
-			// Wrap into a single document format for uniform parsing.
 			raw = []byte(fmt.Sprintf(`{"vertices":%s,"edges":%s}`, vd, ed))
 		}
 	} else {
@@ -169,9 +239,7 @@ func LoadCPG(path string) (*CPG, error) {
 	return parseCPG(raw)
 }
 
-// parseCPG handles both flat and TinkerPop GraphSON formats.
 func parseCPG(raw []byte) (*CPG, error) {
-	// Try TinkerPop GraphSON wrapper first ({"@type":"tinker:graph","@value":{...}})
 	var wrapper struct {
 		Value json.RawMessage `json:"@value"`
 	}
@@ -189,7 +257,7 @@ func parseCPG(raw []byte) (*CPG, error) {
 
 	cpg := &CPG{
 		Vertices:          make([]*Vertex, 0, len(doc.Vertices)),
-		Edges:            make([]*Edge, 0, len(doc.Edges)),
+		Edges:             make([]*Edge, 0, len(doc.Edges)),
 		methodsByFullname: make(map[string]*Vertex),
 		callsBySource:     make(map[string][]*Edge),
 		importsByFile:     make(map[string][]string),
@@ -219,9 +287,6 @@ func parseCPG(raw []byte) (*CPG, error) {
 	return cpg, nil
 }
 
-// parseGraphSONVertex extracts id, label, and flattened properties from a
-// vertex that may be flat ({"id":"...","label":"...","properties":{...}}) or
-// TinkerPop GraphSON ({"@type":"g:Vertex","id":{"@type":"g:Int64","@value":...}, ...}).
 func parseGraphSONVertex(raw json.RawMessage) (id, label string, props map[string]any) {
 	props = make(map[string]any)
 
@@ -257,8 +322,6 @@ func parseGraphSONEdge(raw json.RawMessage) (from, to, label string) {
 	return from, to, e.Label
 }
 
-// unwrapGraphSONValue extracts the actual value from TinkerPop {"@type":"...","@value":...}
-// wrappers. If the input is not wrapped, it returns the value unchanged.
 func unwrapGraphSONValue(v any) any {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -270,12 +333,8 @@ func unwrapGraphSONValue(v any) any {
 	return v
 }
 
-// unwrapGraphSONProperty extracts the first value from a TinkerPop vertex property:
-// {"@type":"g:VertexProperty","@value":{"@type":"g:List","@value":[actualValue]}}
 func unwrapGraphSONProperty(v any) any {
 	unwrapped := unwrapGraphSONValue(v)
-
-	// After unwrapping @value, we may have a list — take the first element.
 	if slice, ok := unwrapped.([]any); ok && len(slice) > 0 {
 		return unwrapGraphSONValue(slice[0])
 	}
@@ -341,11 +400,7 @@ func (cpg *CPG) FindPathToSink(vulnerableSymbol, pkgName string) PathAnalysis {
 		}
 	}
 
-	return PathAnalysis{
-		PathFound:  false,
-		Confidence: 0.0,
-		Path:       []string{},
-	}
+	return PathAnalysis{PathFound: false, Confidence: 0.0, Path: []string{}}
 }
 
 func (cpg *CPG) findDirectCallPath(targetSymbol string) []string {
@@ -400,7 +455,6 @@ func (cpg *CPG) findEntryPoints() []*Vertex {
 		if !hasName {
 			name, _ = v.Properties["METHOD_FULL_NAME"].(string)
 		}
-
 		if name == "" {
 			continue
 		}
@@ -408,23 +462,20 @@ func (cpg *CPG) findEntryPoints() []*Vertex {
 		lower := strings.ToLower(name)
 		isEntryPoint :=
 			strings.HasSuffix(lower, ".main") ||
-			strings.Contains(lower, "handler") ||
-			strings.Contains(lower, "controller") ||
-			strings.Contains(lower, "serve") ||
-			strings.Contains(lower, "listen") ||
-			strings.Contains(lower, "start") ||
-			strings.Contains(lower, "router") ||
-			strings.Contains(lower, "middleware") ||
-			strings.Contains(lower, "endpoint") ||
-			strings.Contains(lower, ".handle") ||
-			strings.Contains(lower, ".process") ||
-			strings.Contains(lower, ".worker")
-
-		if !isEntryPoint {
-			isEntryPoint = strings.Contains(lower, "http") ||
+				strings.Contains(lower, "handler") ||
+				strings.Contains(lower, "controller") ||
+				strings.Contains(lower, "serve") ||
+				strings.Contains(lower, "listen") ||
+				strings.Contains(lower, "start") ||
+				strings.Contains(lower, "router") ||
+				strings.Contains(lower, "middleware") ||
+				strings.Contains(lower, "endpoint") ||
+				strings.Contains(lower, ".handle") ||
+				strings.Contains(lower, ".process") ||
+				strings.Contains(lower, ".worker") ||
+				strings.Contains(lower, "http") ||
 				strings.Contains(lower, "grpc") ||
 				strings.Contains(lower, "server")
-		}
 
 		if isEntryPoint {
 			entryPoints = append(entryPoints, v)
@@ -449,9 +500,7 @@ func (cpg *CPG) checkPackageImports(pkgName string) (float64, int) {
 		return 0.0, 0
 	}
 
-	conf := capConfidence(0.7+float64(count)*0.05, 0.95)
-
-	return conf, count
+	return capConfidence(0.7+float64(count)*0.05, 0.95), count
 }
 
 func (cpg *CPG) getVertex(id string) *Vertex {
@@ -476,7 +525,6 @@ func vertexFullName(v *Vertex) string {
 	return ""
 }
 
-// capConfidence clamps confidence to a maximum value.
 func capConfidence(val, max float64) float64 {
 	if val > max {
 		return max
@@ -497,16 +545,6 @@ func extractVulnerableSymbol(f *models.Finding) string {
 	if f.Package == "" {
 		return ""
 	}
-
 	parts := strings.Split(f.Package, "/")
-	symbol := parts[len(parts)-1]
-
-	// If the RuleID looks like a CWE or a function-specific rule (e.g. semgrep rule
-	// with a function name), prefer using the package-level symbol.
-	// For SCA findings (grype), the package name is the best signal we have.
-	if symbol == "" {
-		return ""
-	}
-
-	return symbol
+	return parts[len(parts)-1]
 }

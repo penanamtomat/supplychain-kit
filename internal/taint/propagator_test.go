@@ -247,3 +247,82 @@ func TestPropagator_Trace_BestSource(t *testing.T) {
 		t.Errorf("Expected 1.0 confidence, got %f", result.Confidence)
 	}
 }
+
+func TestSanitizePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected []string
+	}{
+		{
+			name:     "empty path",
+			input:    []string{},
+			expected: []string{},
+		},
+		{
+			name:     "clean path - no changes",
+			input:    []string{"app/controllers/user.js::program", "usersPage", "validate"},
+			expected: []string{"app/controllers/user.js::program", "usersPage", "validate"},
+		},
+		{
+			name:     "remove RET marker",
+			input:    []string{"app/controllers/auth.js::program", "RET"},
+			expected: []string{"app/controllers/auth.js::program"},
+		},
+		{
+			name:     "remove as marker",
+			input:    []string{"app/controllers/user.js::program", "usersPage", "as"},
+			expected: []string{"app/controllers/user.js::program", "usersPage"},
+		},
+		{
+			name:     "remove this marker",
+			input:    []string{"app/controllers/post.js::handler", "this", "process"},
+			expected: []string{"app/controllers/post.js::handler", "process"},
+		},
+		{
+			name:     "remove lambda marker",
+			input:    []string{"app/controllers/file.js::upload", "<lambda>", "process"},
+			expected: []string{"app/controllers/file.js::upload", "process"},
+		},
+		{
+			name:     "remove init marker",
+			input:    []string{"app/models/User.js", "<init>", "validate"},
+			expected: []string{"app/models/User.js", "validate"},
+		},
+		{
+			name:     "multiple markers",
+			input:    []string{"source", "RET", "as", "this", "sink"},
+			expected: []string{"source", "sink"},
+		},
+		{
+			name:     "all markers - keep source",
+			input:    []string{"app.js::main", "RET", "as"},
+			expected: []string{"app.js::main"},
+		},
+		{
+			name:     "remove custom angle bracket nodes",
+			input:    []string{"app.js::handler", "<custom.node>", "sink"},
+			expected: []string{"app.js::handler", "sink"},
+		},
+		{
+			name:     "keep valid single letter vars",
+			input:    []string{"app.js::main", "i", "x", "process"},
+			expected: []string{"app.js::main", "i", "x", "process"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := sanitizePath(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Errorf("sanitizePath() length = %d, want %d", len(result), len(tt.expected))
+				return
+			}
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("sanitizePath()[%d] = %q, want %q", i, result[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}

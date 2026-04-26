@@ -236,7 +236,7 @@ func (p *Propagator) traceFromSource(source *Source, targetSymbol string) TaintR
 			return TaintResult{
 				Exploitable:     true,
 				Confidence:      current.Confidence,
-				Path:            current.Path,
+				Path:            sanitizePath(current.Path),
 				SanitizerFound:  current.Sanitized,
 			}
 		}
@@ -284,6 +284,41 @@ func (p *Propagator) traceFromSource(source *Source, targetSymbol string) TaintR
 	}
 
 	return TaintResult{Exploitable: false, Confidence: 0.0}
+}
+
+// sanitizePath removes internal CPG markers from taint path before output.
+// These are artifacts from Joern CPG that are not meaningful to users.
+func sanitizePath(path []string) []string {
+	if len(path) == 0 {
+		return path
+	}
+
+	result := make([]string, 0, len(path))
+	for _, p := range path {
+		// Skip exact internal markers
+		if p == "RET" || p == "as" || p == "this" {
+			continue
+		}
+		// Skip angle-bracket wrapped patterns and their compounds
+		// Matches: <lambda>, <init>, <lambda>1, <lambda>1:<lambda>2, program:<lambda>, etc.
+		if strings.Contains(p, "<lambda>") || strings.Contains(p, "<init>") ||
+		   strings.Contains(p, "<clinit>") || strings.Contains(p, "<static>") {
+			continue
+		}
+		// Skip pure angle-bracket wrapped nodes
+		if len(p) > 2 && p[0] == '<' && p[len(p)-1] == '>' {
+			continue
+		}
+		result = append(result, p)
+	}
+
+	// Ensure at least one element remains
+	if len(result) == 0 && len(path) > 0 {
+		// Fallback: keep the source (first element)
+		result = []string{path[0]}
+	}
+
+	return result
 }
 
 func (p *Propagator) expandNode(nodeID string) []string {

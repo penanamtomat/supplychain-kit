@@ -513,6 +513,20 @@ ensure_pip3() {
   return 1
 }
 
+ensure_pipx() {
+  check pipx && return 0
+  if check apt-get; then
+    apt-get install -y pipx >/dev/null 2>&1 && check pipx && return 0
+  elif check dnf; then
+    dnf install -y pipx >/dev/null 2>&1 && check pipx && return 0
+  elif check pip3; then
+    pip3 install --quiet --break-system-packages pipx 2>/dev/null \
+      || pip3 install --quiet pipx 2>/dev/null
+    check pipx && return 0
+  fi
+  return 1
+}
+
 if $SKIP_SEMGREP; then
   warn "Skipping semgrep (--no-semgrep)"
 elif semgrep_works; then
@@ -525,7 +539,18 @@ else
 
   if [ "$OS" = "darwin" ] && check brew; then
     brew install semgrep --quiet 2>&1 | tail -1 && SEMGREP_OK=true
-  elif ensure_pip3; then
+  fi
+
+  # Try pipx first — it reliably creates the binary on Python 3.13+ (PEP 668)
+  if ! $SEMGREP_OK && ensure_pipx; then
+    pipx install "$SEMGREP_INSTALL_ARG" >/dev/null 2>&1
+    # pipx installs to ~/.local/bin — ensure it is on PATH for this session
+    export PATH="${PATH}:${HOME}/.local/bin"
+    semgrep_works && SEMGREP_OK=true
+  fi
+
+  # Fallback: plain pip (works on older distros without PEP 668 enforcement)
+  if ! $SEMGREP_OK && ensure_pip3; then
     if check pip3; then
       pip3 install --quiet --break-system-packages "$SEMGREP_INSTALL_ARG" 2>/dev/null \
         || pip3 install --quiet "$SEMGREP_INSTALL_ARG" 2>/dev/null
@@ -535,12 +560,9 @@ else
       semgrep_works && SEMGREP_OK=true
     fi
   fi
-  if ! $SEMGREP_OK && check pipx; then
-    pipx install "$SEMGREP_INSTALL_ARG" >/dev/null 2>&1 && semgrep_works && SEMGREP_OK=true
-  fi
 
   $SEMGREP_OK && info "semgrep installed: $(semgrep --version 2>/dev/null)" \
-              || { warn "semgrep installation failed — SAST code analysis will be unavailable."; warn "Install manually: pip3 install semgrep"; }
+              || { warn "semgrep installation failed — SAST code analysis will be unavailable."; warn "Install manually: pipx install semgrep  OR  pip3 install --break-system-packages semgrep"; }
 fi
 
 # ── joern ─────────────────────────────────────────────────────────────────────

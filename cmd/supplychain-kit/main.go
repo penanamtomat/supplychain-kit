@@ -402,7 +402,6 @@ func buildRegistry(mode, semgrepConfig string, gitHistory bool) *scanner.Registr
 		return scanner.NewRegistry(
 			syftadapter.New(), grype.New(), trivyadapter.New(), osvscanner.New(),
 			sg, gl,
-			joern.New(),
 		)
 	}
 }

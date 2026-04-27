@@ -39,6 +39,7 @@ import (
 	trivyadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/trivy"
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
 	"github.com/penanamtomat/supplychain-kit/internal/taint"
+	reachgoanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/golang"
 	reachjsanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/js"
 	reachpyanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/python"
 )
@@ -193,7 +194,7 @@ Target:
 			if artifacts != nil {
 				cpgPath = artifacts[joern.ArtifactCPGPath]
 			}
-			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer())
+			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer(), reachgoanalyzer.NewAnalyzer())
 			if err := reach.Analyze(cmd.Context(), asset.ID, repo, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
 			}
@@ -840,7 +841,7 @@ Examples:
 			if artifacts != nil {
 				cpgPath = artifacts[joern.ArtifactCPGPath]
 			}
-			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer())
+			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer(), reachgoanalyzer.NewAnalyzer())
 			if err := reach.Analyze(cmd.Context(), asset.ID, repo, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
 			}

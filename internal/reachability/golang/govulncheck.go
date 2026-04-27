@@ -244,6 +244,11 @@ type govulnFrame struct {
 // runGovulncheck shells out to govulncheck -json ./... and parses the stream.
 // Returns nil, error if govulncheck is not installed or fails unexpectedly.
 func runGovulncheck(ctx context.Context, repoPath string) (*govulnResult, error) {
+	// Skip immediately if this is not a Go module — govulncheck hangs on non-Go repos.
+	if _, err := os.Stat(filepath.Join(repoPath, "go.mod")); err != nil {
+		return nil, errors.New("no go.mod found — not a Go module")
+	}
+
 	binary, err := exec.LookPath("govulncheck")
 	if err != nil {
 		return nil, errors.New("govulncheck not found in PATH")

@@ -67,7 +67,7 @@ func (a *Analyzer) Analyze(_ context.Context, repoPath string, f *models.Finding
 	}
 
 	// ── Layer 3: Vulnerable Symbol Call Check ─────────────────────────────
-	symbol := extractVulnerableSymbol(f)
+	symbol, isCVESymbol := extractVulnerableSymbol(f)
 	if symbol == "" {
 		log.Debug().Str("pkg", pkgName).Msg("python: imported, no CVE symbol resolved → unknown")
 		return reachability.Result{
@@ -85,6 +85,18 @@ func (a *Analyzer) Analyze(_ context.Context, repoPath string, f *models.Finding
 			Status:     models.ReachReachable,
 			Confidence: 0.9,
 			Evidence:   call.Evidence,
+		}, nil
+	}
+
+	// Symbol not found. If symbol came from CVE metadata we trust it and mark
+	// unreachable. If it was only a fallback bare name (weak signal), the package
+	// is imported but we can't confirm the specific call pattern → unknown.
+	if !isCVESymbol {
+		log.Debug().Str("pkg", pkgName).Msg("python: imported, fallback symbol not matched → unknown")
+		return reachability.Result{
+			Status:     models.ReachUnknown,
+			Confidence: 0.4,
+			Evidence:   "package imported; CVE symbol unknown, cannot confirm call",
 		}, nil
 	}
 
@@ -138,23 +150,26 @@ func extractPkgName(raw string) string {
 }
 
 // extractVulnerableSymbol derives the affected function name from the finding.
-func extractVulnerableSymbol(f *models.Finding) string {
+// Returns (symbol, isCVESymbol). isCVESymbol is false when only a weak fallback
+// (bare package name) was available.
+func extractVulnerableSymbol(f *models.Finding) (string, bool) {
 	if f.Raw != nil {
 		for _, key := range []string{"affected_functions", "affectedFunctions", "vulnerability_function"} {
 			if v, ok := f.Raw[key]; ok {
 				if s, ok := v.(string); ok && s != "" {
-					return sanitizeSymbol(s)
+					return sanitizeSymbol(s), true
 				}
 				if arr, ok := v.([]interface{}); ok && len(arr) > 0 {
 					if s, ok := arr[0].(string); ok && s != "" {
-						return sanitizeSymbol(s)
+						return sanitizeSymbol(s), true
 					}
 				}
 			}
 		}
 	}
-	// Fallback: bare package name as symbol (catches pkg() and pkg.method()).
-	return bareModule(normPkg(extractPkgName(f.Package)))
+	// Fallback: bare package name as symbol (weak signal — catches pkg() and pkg.method()).
+	sym := bareModule(normPkg(extractPkgName(f.Package)))
+	return sym, false
 }
 
 func sanitizeSymbol(s string) string {

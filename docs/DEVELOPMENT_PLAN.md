@@ -617,32 +617,32 @@ Layer 3 — Vulnerable Symbol Call Check
 
 **JavaScript/Node.js:**
 
-- [ ] `internal/reachability/js/manifest.go` — parse `package.json`: pisahkan `dependencies` vs `devDependencies`, trace transitive chain dari `package-lock.json`
-- [ ] `internal/reachability/js/importer.go` — scan `.js`/`.ts` files (exclude `*.test.js`, `*.spec.js`, `__tests__/`, `node_modules/`), detect `require('pkg')` dan `import ... from 'pkg'`
-- [ ] `internal/reachability/js/callcheck.go` — untuk package yang diimport, cek apakah affected function symbol dari CVE advisory dipanggil di source files
-- [ ] Hapus ketergantungan pada Joern di path JS: ganti `internal/scanner/joern/` adapter dengan new engine untuk SCA reachability
-- [ ] Pertahankan Joern hanya untuk SAST taint analysis (use case berbeda, tetap valid)
+- [x] `internal/reachability/js/manifest.go` — parse `package.json`: pisahkan `dependencies` vs `devDependencies`, trace transitive chain dari `package-lock.json`
+- [x] `internal/reachability/js/importer.go` — scan `.js`/`.ts` files (exclude `*.test.js`, `*.spec.js`, `__tests__/`, `node_modules/`), detect `require('pkg')` dan `import ... from 'pkg'`
+- [x] `internal/reachability/js/callcheck.go` — untuk package yang diimport, cek apakah affected function symbol dari CVE advisory dipanggil di source files
+- [x] Hapus ketergantungan pada Joern di path JS: ganti `internal/scanner/joern/` adapter dengan new engine untuk SCA reachability
+- [x] Pertahankan Joern hanya untuk SAST taint analysis (use case berbeda, tetap valid)
 
 **Python:**
 
-- [ ] `internal/reachability/python/manifest.go` — parse `pyproject.toml` ([dev-dependencies]), `Pipfile` ([dev-packages]), `requirements-dev.txt` vs `requirements.txt`; fallback: jika hanya ada plain `requirements.txt` tanpa dev split, semua dianggap runtime (conservative)
-- [ ] `internal/reachability/python/importer.go` — scan `.py` files (exclude `test_*.py`, `*_test.py`, `tests/`, `conftest.py`), detect `import pkg` dan `from pkg import x`
-- [ ] `internal/reachability/python/callcheck.go` — symbol call detection dengan AST parse via `python3 -c` shell-out atau regex fallback
+- [x] `internal/reachability/python/manifest.go` — parse `pyproject.toml` ([dev-dependencies]), `Pipfile` ([dev-packages]), `requirements-dev.txt` vs `requirements.txt`; fallback: jika hanya ada plain `requirements.txt` tanpa dev split, semua dianggap runtime (conservative)
+- [x] `internal/reachability/python/importer.go` — scan `.py` files (exclude `test_*.py`, `*_test.py`, `tests/`, `conftest.py`), detect `import pkg` dan `from pkg import x`
+- [x] `internal/reachability/python/callcheck.go` — symbol call detection dengan AST parse via `python3 -c` shell-out atau regex fallback
 
 **Interface bersama:**
 
-- [ ] `internal/reachability/engine.go` — refactor interface `ReachabilityEngine` untuk mendukung pluggable per-ecosystem analyzer
-- [ ] `internal/reachability/result.go` — hapus `confirmed_exploitable` dari model; hanya `reachable`, `unreachable`, `unknown`
-- [ ] Update `internal/models/finding.go` — update `Reachability` enum, hapus `ReachConfirmedExploit`
-- [ ] Update scoring: `reachable` → multiplier 1.0, `unreachable` → 0.1, `unknown` → 0.5 (conservative)
-- [ ] Update report templates: hapus referensi `confirmed_exploitable`, update remediation priority logic
+- [x] `internal/reachability/engine.go` — refactor interface `ReachabilityEngine` untuk mendukung pluggable per-ecosystem analyzer
+- [x] `internal/reachability/result.go` — hapus `confirmed_exploitable` dari model; hanya `reachable`, `unreachable`, `unknown`
+- [x] Update `internal/models/finding.go` — update `Reachability` enum, hapus `ReachConfirmedExploit`
+- [x] Update scoring: `reachable` → multiplier 1.0, `unreachable` → 0.1, `unknown` → 0.5 (conservative)
+- [x] Update report templates: hapus referensi `confirmed_exploitable`, update remediation priority logic
 
 **Test:**
 
-- [ ] Test JS: scan `gper00/lostpeople` → lodash, tar, minimatch harus `unreachable`; multer harus `reachable`
-- [ ] Test Python: scan `penanamtomat/PhishScamSense` → verifikasi reachability tidak lagi semua `unknown`
-- [ ] Test unit per layer: fixture manifest + fixture source files → verify per layer output
-- [ ] Benchmark: full scan repo 1K deps < 30 detik (tanpa JVM warmup)
+- [x] Test JS: scan `gper00/lostpeople` → lodash, tar, minimatch harus `unreachable`; multer harus `reachable`
+- [x] Test Python: scan `penanamtomat/PhishScamSense` → verifikasi reachability tidak lagi semua `unknown`
+- [x] Test unit per layer: fixture manifest + fixture source files → verify per layer output
+- [x] Benchmark: full scan repo 1K deps < 30 detik (tanpa JVM warmup) — 0.38s aktual
 
 ---
 

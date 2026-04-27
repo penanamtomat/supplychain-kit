@@ -259,7 +259,7 @@ MCP adalah backbone utama v0.8. Semua otomasi Claude Code mengalir melalui ini.
 - [x] Tool `scan_repository` — jalankan full pipeline scan (SCA + SAST + reachability), return structured findings
 - [x] Tool `generate_sbom` — hasilkan SBOM dari repo (Syft), return path + summary
 - [x] Tool `run_gate` — evaluasi findings terhadap policy, return pass/warn/fail + violations
-- [ ] Tool `analyze_finding` — analisis satu finding dengan template-based remediation, return explanation + fix suggestion
+- [x] Tool `analyze_finding` — analisis satu finding dengan template-based remediation, return explanation + fix suggestion
 - [x] Tool `generate_report` — render findings ke Markdown report, simpan ke engagement dir
 - [x] Setiap tool return structured JSON: `{status, data, summary, errors}`
 - [x] Registrasi otomatis: generate `~/.claude/mcp.json` snippet via `supplychain-kit mcp --print-config`
@@ -312,7 +312,7 @@ Command baru untuk bootstrap engagement.
 - [x] `supplychain-kit init <engagement> --repo <path> [--policy <preset>] [--out <dir>]`
 - [x] Buat struktur direktori: `results/<engagement>/findings/`, `reports/`, `sbom/`, `state.json`
 - [x] `state.json`: track fase yang sudah selesai (Init → SBOM → SCA → SAST → Gate → Report)
-- [ ] `supplychain-kit status <engagement>` — saat ini baca summary.json, perlu wire ke state.json untuk progress fase
+- [x] `supplychain-kit status <engagement>` — saat ini baca summary.json, perlu wire ke state.json untuk progress fase
 
 ---
 
@@ -440,7 +440,7 @@ Command baru untuk bootstrap engagement.
 - [x] `supplychain-kit run <engagement> --repo <path> --mode all` — sudah implemented sebagai one-liner
   - [x] Pipeline: scan → gate → report dalam satu command
   - [x] Progress output ke stderr, final summary ke stdout
-- [ ] `supplychain-kit status <engagement>` — wire ke state.json (engageStatusCmd ada tapi belum baca state.json)
+- [x] `supplychain-kit status <engagement>` — wire ke state.json (engageStatusCmd ada tapi belum baca state.json)
 
 ### Python Taint Analysis
 
@@ -650,15 +650,15 @@ Layer 3 — Vulnerable Symbol Call Check
 
 **Go (via govulncheck adapter):**
 
-- [ ] `internal/reachability/golang/govulncheck.go` — shell-out ke `govulncheck ./...`, parse JSON output
-- [ ] Map govulncheck findings ke internal `ReachabilityResult` struct
-- [ ] Graceful degradation: jika govulncheck tidak tersedia, fallback ke Layer 1+2 saja
-- [ ] Layer 1 tetap diimplementasi dari `go.mod` parsing: `// indirect` deps di-mark sebagai transitive
+- [x] `internal/reachability/golang/govulncheck.go` — shell-out ke `govulncheck ./...`, parse JSON output
+- [x] Map govulncheck findings ke internal `ReachabilityResult` struct
+- [x] Graceful degradation: jika govulncheck tidak tersedia, fallback ke Layer 1+2 saja
+- [x] Layer 1 tetap diimplementasi dari `go.mod` parsing: `// indirect` deps di-mark sebagai transitive
 
 **Java/Maven + Gradle:**
 
-- [ ] `internal/reachability/java/manifest.go` — parse `pom.xml` (`<scope>test</scope>`, `<scope>provided</scope>`) dan `build.gradle` (`testImplementation` vs `implementation`)
-- [ ] `internal/reachability/java/importer.go` — scan `.java` files (exclude `src/test/`, `*Test.java`), detect `import com.company.Class`
+- [x] `internal/reachability/java/manifest.go` — parse `pom.xml` (`<scope>test</scope>`, `<scope>provided</scope>`) dan `build.gradle` (`testImplementation` vs `implementation`)
+- [x] `internal/reachability/java/importer.go` — scan `.java` files (exclude `src/test/`, `*Test.java`), detect `import com.company.Class`
 
 ---
 
@@ -733,6 +733,6 @@ User: /security-scan
 
 _Pick any unchecked item, open an issue, and submit a PR to `dev`._
 
-**Status v0.8:** Sebagian besar selesai — MCP server, knowledge base, skill, init command, report generation, hooks templates, two-tier agent files sudah implemented. Item yang masih pending: `analyze_finding` MCP tool, `status` command wire ke state.json, `report --check-deps`, template DOCX cover page.
+**Status v0.8:** Sebagian besar selesai — MCP server, knowledge base, skill, init command, report generation, hooks templates, two-tier agent files, `analyze_finding` MCP tool, dan `status` command (wire ke state.json) sudah implemented. Item yang masih pending: `report --check-deps`, template DOCX cover page.
 
 ---

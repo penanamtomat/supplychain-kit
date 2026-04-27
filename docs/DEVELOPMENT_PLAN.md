@@ -650,15 +650,15 @@ Layer 3 — Vulnerable Symbol Call Check
 
 **Go (via govulncheck adapter):**
 
-- [ ] `internal/reachability/golang/govulncheck.go` — shell-out ke `govulncheck ./...`, parse JSON output
-- [ ] Map govulncheck findings ke internal `ReachabilityResult` struct
-- [ ] Graceful degradation: jika govulncheck tidak tersedia, fallback ke Layer 1+2 saja
-- [ ] Layer 1 tetap diimplementasi dari `go.mod` parsing: `// indirect` deps di-mark sebagai transitive
+- [x] `internal/reachability/golang/govulncheck.go` — shell-out ke `govulncheck ./...`, parse JSON output
+- [x] Map govulncheck findings ke internal `ReachabilityResult` struct
+- [x] Graceful degradation: jika govulncheck tidak tersedia, fallback ke Layer 1+2 saja
+- [x] Layer 1 tetap diimplementasi dari `go.mod` parsing: `// indirect` deps di-mark sebagai transitive
 
 **Java/Maven + Gradle:**
 
-- [ ] `internal/reachability/java/manifest.go` — parse `pom.xml` (`<scope>test</scope>`, `<scope>provided</scope>`) dan `build.gradle` (`testImplementation` vs `implementation`)
-- [ ] `internal/reachability/java/importer.go` — scan `.java` files (exclude `src/test/`, `*Test.java`), detect `import com.company.Class`
+- [x] `internal/reachability/java/manifest.go` — parse `pom.xml` (`<scope>test</scope>`, `<scope>provided</scope>`) dan `build.gradle` (`testImplementation` vs `implementation`)
+- [x] `internal/reachability/java/importer.go` — scan `.java` files (exclude `src/test/`, `*Test.java`), detect `import com.company.Class`
 
 ---
 

@@ -15,7 +15,7 @@ func TestScore_UnreachableCriticalIsLowerThanReachableMedium(t *testing.T) {
 	}
 	reachableMed := &models.Finding{
 		Severity:     models.SeverityMedium,
-		Reachability: models.ReachConfirmed,
+		Reachability: models.ReachReachable,
 	}
 
 	s := Scorer{}
@@ -29,7 +29,7 @@ func TestScore_UnreachableCriticalIsLowerThanReachableMedium(t *testing.T) {
 
 func TestScore_BoundedToHundred(t *testing.T) {
 	asset := &models.Asset{Environment: models.EnvProduction, Tier: 0, InternetFacing: true}
-	f := &models.Finding{Severity: models.SeverityCritical, CVSS: 10.0, Reachability: models.ReachConfirmed}
+	f := &models.Finding{Severity: models.SeverityCritical, CVSS: 10.0, Reachability: models.ReachReachable}
 
 	got := Scorer{}.Score(f, asset)
 	if got > 100 {

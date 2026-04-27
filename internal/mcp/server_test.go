@@ -60,7 +60,6 @@ func TestReachabilityNote(t *testing.T) {
 		want string
 	}{
 		{models.ReachReachable, "Fix"},
-		{models.ReachConfirmed, "Fix"},
 		{models.ReachUnknown, "Treat"},
 		{models.ReachUnreachable, "sprint"},
 	}

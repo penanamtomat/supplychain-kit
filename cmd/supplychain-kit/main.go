@@ -39,6 +39,8 @@ import (
 	trivyadapter "github.com/penanamtomat/supplychain-kit/internal/scanner/trivy"
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
 	"github.com/penanamtomat/supplychain-kit/internal/taint"
+	reachjsanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/js"
+	reachpyanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/python"
 )
 
 // version is set at build time: go build -ldflags "-X main.version=$(git describe --tags --always)"
@@ -191,25 +193,25 @@ Target:
 			if artifacts != nil {
 				cpgPath = artifacts[joern.ArtifactCPGPath]
 			}
-			reach := reachability.New(nil)
-			if err := reach.Analyze(cmd.Context(), asset.ID, cpgPath, merged); err != nil {
+			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer())
+			if err := reach.Analyze(cmd.Context(), asset.ID, repo, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
 			}
 
-			// Run taint analysis if CPG is available
+			// Run taint analysis (SAST) if CPG is available — separate from SCA reachability.
 			if cpgPath != "" {
 				cpg, err := reachability.LoadCPG(cpgPath)
 				if err == nil && cpg != nil {
 					taintEngine := taint.NewEngine(cpg)
 					taintEngine.Analyze(merged)
-					exploitableCount := 0
+					reachableViaTaint := 0
 					for _, f := range merged {
-						if f.Reachability == models.ReachConfirmedExploit {
-							exploitableCount++
+						if f.Reachability == models.ReachReachable && len(f.Path) > 0 {
+							reachableViaTaint++
 						}
 					}
-					if exploitableCount > 0 {
-						fmt.Fprintf(os.Stderr, "  Taint analysis: %d confirmed exploitable path(s)\n", exploitableCount)
+					if reachableViaTaint > 0 {
+						fmt.Fprintf(os.Stderr, "  Taint analysis: %d reachable path(s) confirmed\n", reachableViaTaint)
 					}
 				}
 			}
@@ -361,17 +363,14 @@ func writeTableTo(w *os.File, findings []*models.Finding) {
 			reach = "-"
 		}
 
-		// Format taint path for exploitable findings
+		// Format call path for reachable findings
 		taintPath := "-"
-		if f.Reachability == models.ReachConfirmedExploit && len(f.Path) > 0 {
-			// Show shortened path: source → ... → sink
+		if f.Reachability == models.ReachReachable && len(f.Path) > 0 {
 			if len(f.Path) <= 3 {
 				taintPath = strings.Join(f.Path, " → ")
 			} else {
 				taintPath = fmt.Sprintf("%s → ... → %s", f.Path[0], f.Path[len(f.Path)-1])
 			}
-		} else if f.Reachability == models.ReachConfirmedExploit {
-			taintPath = "exploitable (no path details)"
 		}
 
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%s\n",
@@ -488,17 +487,14 @@ func printTable(findings []*models.Finding) error {
 			reach = "-"
 		}
 
-		// Format taint path for exploitable findings
+		// Format call path for reachable findings
 		taintPath := "-"
-		if f.Reachability == models.ReachConfirmedExploit && len(f.Path) > 0 {
-			// Show shortened path: source → ... → sink
+		if f.Reachability == models.ReachReachable && len(f.Path) > 0 {
 			if len(f.Path) <= 3 {
 				taintPath = strings.Join(f.Path, " → ")
 			} else {
 				taintPath = fmt.Sprintf("%s → ... → %s", f.Path[0], f.Path[len(f.Path)-1])
 			}
-		} else if f.Reachability == models.ReachConfirmedExploit {
-			taintPath = "exploitable (no path details)"
 		}
 
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%.2f\t%s\n",
@@ -844,25 +840,25 @@ Examples:
 			if artifacts != nil {
 				cpgPath = artifacts[joern.ArtifactCPGPath]
 			}
-			reach := reachability.New(nil)
-			if err := reach.Analyze(cmd.Context(), asset.ID, cpgPath, merged); err != nil {
+			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer())
+			if err := reach.Analyze(cmd.Context(), asset.ID, repo, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
 			}
 
-			// Run taint analysis if CPG is available
+			// Run taint analysis (SAST) if CPG is available — separate from SCA reachability.
 			if cpgPath != "" {
 				cpg, err := reachability.LoadCPG(cpgPath)
 				if err == nil && cpg != nil {
 					taintEngine := taint.NewEngine(cpg)
 					taintEngine.Analyze(merged)
-					exploitableCount := 0
+					reachableViaTaint := 0
 					for _, f := range merged {
-						if f.Reachability == models.ReachConfirmedExploit {
-							exploitableCount++
+						if f.Reachability == models.ReachReachable && len(f.Path) > 0 {
+							reachableViaTaint++
 						}
 					}
-					if exploitableCount > 0 {
-						fmt.Fprintf(os.Stderr, "  Taint analysis: %d confirmed exploitable path(s)\n", exploitableCount)
+					if reachableViaTaint > 0 {
+						fmt.Fprintf(os.Stderr, "  Taint analysis: %d reachable path(s) confirmed\n", reachableViaTaint)
 					}
 				}
 			}
@@ -1624,7 +1620,7 @@ func renderMarkdownReport(path, engagement string, findings []*models.Finding, t
 
 func reachabilityNote(r models.Reachability) string {
 	switch r {
-	case models.ReachReachable, models.ReachConfirmed:
+	case models.ReachReachable:
 		return "Confirmed reachable — highest priority"
 	case models.ReachUnknown:
 		return "Reachability unknown — treat as reachable"

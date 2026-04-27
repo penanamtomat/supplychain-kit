@@ -107,7 +107,7 @@ func (c *Client) pushOne(ctx context.Context, engagementID int, f *models.Findin
 		FilePath:     f.FilePath,
 		Line:         f.Line,
 		Active:       true,
-		Verified:     f.Reachability == models.ReachReachable || f.Reachability == models.ReachConfirmed,
+		Verified:     f.Reachability == models.ReachReachable,
 		EngagementID: engagementID,
 	}
 	body, _ := json.Marshal(payload)

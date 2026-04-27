@@ -83,9 +83,7 @@ func (g *Grouper) GroupByPackage() []*PackageRemediation {
 			CVSS:        f.CVSS,
 			Title:       f.Title,
 			AdvisoryURL: f.AdvisoryURL,
-			Reachable:   f.Reachability == models.ReachReachable ||
-			              f.Reachability == models.ReachConfirmed ||
-			              f.Reachability == models.ReachConfirmedExploit,
+			Reachable:   f.Reachability == models.ReachReachable,
 		}
 		pr.Vulnerabilities = append(pr.Vulnerabilities, vuln)
 
@@ -177,14 +175,12 @@ func isNewerVersion(version1, version2 string) bool {
 
 // isMoreReachable checks if reachability1 is more critical than reachability2.
 func isMoreReachable(reachability1 models.Reachability, reachability2 string) bool {
-	// Order: confirmed_exploitable > runtime_confirmed > reachable > unknown > unreachable
+	// Order: reachable > unknown > unreachable
 	order := map[string]int{
-		string(models.ReachConfirmedExploit): 5,
-		string(models.ReachConfirmed):        4,
-		string(models.ReachReachable):        3,
-		string(models.ReachUnknown):          2,
-		string(models.ReachUnreachable):      1,
-		"":                                   0,
+		string(models.ReachReachable):   3,
+		string(models.ReachUnknown):     2,
+		string(models.ReachUnreachable): 1,
+		"":                              0,
 	}
 
 	return order[string(reachability1)] > order[reachability2]

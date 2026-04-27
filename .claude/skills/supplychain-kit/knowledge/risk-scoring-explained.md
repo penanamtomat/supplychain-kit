@@ -21,12 +21,11 @@ Sourced from NVD or the scanner that reported the finding. If absent (SAST rule 
 
 | Reachability | Multiplier | Rationale |
 |---|---|---|
-| `reachable` | 1.0 | Confirmed exploitable path exists |
-| `runtime_confirmed` | 1.0 | Observed at runtime (eBPF) |
-| `unknown` | 0.7 | Cannot rule out reachability |
-| `unreachable` | 0.1 | No path from entry point to vulnerable code |
+| `reachable` | 1.0 | Vulnerable symbol called, evidence at file:line |
+| `unknown` | 0.5 | Imported but symbol not resolvable — conservative |
+| `unreachable` | 0.1 | Dev-only dep or never imported in production |
 
-**Design decision:** `unknown` is 0.7 not 1.0 — it is less urgent than confirmed reachable, but treated with high priority. When in doubt, remediate.
+**Design decision (v1.1):** Three values only — no more `confirmed_exploitable` or `runtime_confirmed`. `unknown` is 0.5 (conservative) not 0.7. When in doubt, treat as reachable.
 
 ### Tier Multiplier
 

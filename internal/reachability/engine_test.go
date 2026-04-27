@@ -7,7 +7,7 @@ import (
 )
 
 func TestEngine_Analyze(t *testing.T) {
-	engine := New(nil)
+	engine := New()
 
 	findings := []*models.Finding{
 		{
@@ -77,7 +77,7 @@ func TestEngine_analyzeWithCPG(t *testing.T) {
 		},
 	}
 
-	engine := New(nil)
+	engine := New()
 
 	findings := []*models.Finding{
 		{

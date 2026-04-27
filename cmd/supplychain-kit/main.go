@@ -1343,6 +1343,7 @@ Tools exposed:
   generate_sbom      Generate CycloneDX 1.5 SBOM via syft
   run_gate           Evaluate findings against quality gate policy
   generate_report    Render findings into Markdown (and optionally DOCX) report
+  analyze_finding    Analyze a single finding: explanation + remediation + priority
 
 Examples:
   supplychain-kit mcp                  # start server (Claude Code connects automatically)

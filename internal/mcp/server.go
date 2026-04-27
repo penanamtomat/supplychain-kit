@@ -22,6 +22,7 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/models"
 	"github.com/penanamtomat/supplychain-kit/internal/quality"
 	"github.com/penanamtomat/supplychain-kit/internal/reachability"
+	pkgremediation "github.com/penanamtomat/supplychain-kit/internal/remediation/pkg"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/gitleaks"
 	"github.com/penanamtomat/supplychain-kit/internal/scanner/grype"
@@ -86,6 +87,7 @@ func New() *server.MCPServer {
 	s.AddTool(toolGenerateSBOM(), handleGenerateSBOM)
 	s.AddTool(toolRunGate(), handleRunGate)
 	s.AddTool(toolGenerateReport(), handleGenerateReport)
+	s.AddTool(toolAnalyzeFinding(), handleAnalyzeFinding)
 
 	return s
 }
@@ -154,6 +156,13 @@ func toolGenerateReport() mcp.Tool {
 		mcp.WithDescription("Render all findings for an engagement into a per-finding Markdown report saved to results/<engagement>/reports/report.md."),
 		mcp.WithString("engagement", mcp.Required(), mcp.Description("Engagement name — findings.json must exist in the engagement dir")),
 		mcp.WithString("format", mcp.Description("Output format: markdown | docx | all (default: markdown). DOCX requires pandoc.")),
+	)
+}
+
+func toolAnalyzeFinding() mcp.Tool {
+	return mcp.NewTool("analyze_finding",
+		mcp.WithDescription("Analyze a single SCA/SAST finding and return a structured explanation with remediation steps, upgrade command, priority, and reachability context. Input is a finding JSON object from findings.json."),
+		mcp.WithString("finding", mcp.Required(), mcp.Description("JSON string of a single finding object (as returned by the scan_repository tool or from findings.json)")),
 	)
 }
 
@@ -482,6 +491,107 @@ func handleGenerateReport(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 		},
 		Errors: errs,
 	})
+}
+
+func handleAnalyzeFinding(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	findingJSON, _ := args["finding"].(string)
+
+	if findingJSON == "" {
+		return errRespond("finding JSON string is required")
+	}
+
+	var f models.Finding
+	if err := json.Unmarshal([]byte(findingJSON), &f); err != nil {
+		return errRespond(fmt.Sprintf("parse finding JSON: %v", err))
+	}
+
+	// Use the remediation grouper to generate per-package guidance.
+	grouper := pkgremediation.NewGrouper([]*models.Finding{&f})
+	pkgs := grouper.GroupByPackage()
+
+	if len(pkgs) == 0 {
+		return errRespond("no package information found in finding")
+	}
+	pr := pkgs[0]
+
+	// Build explanation based on finding fields.
+	explanation := buildFindingExplanation(&f, pr)
+
+	return respond(toolResult{
+		Status:  "ok",
+		Summary: fmt.Sprintf("%s in %s — %s | %s", f.RuleID, f.Package, strings.ToUpper(string(f.Severity)), pr.Priority),
+		Data: map[string]interface{}{
+			"finding_id":      f.ID,
+			"rule_id":         f.RuleID,
+			"package":         f.Package,
+			"version":         f.Version,
+			"severity":        strings.ToUpper(string(f.Severity)),
+			"cvss":            f.CVSS,
+			"reachability":    string(f.Reachability),
+			"risk_score":      f.RiskScore,
+			"priority":        pr.Priority,
+			"fixed_version":   f.FixedVersion,
+			"upgrade_command": pr.UpgradeCommand,
+			"explanation":     explanation,
+			"advisory_url":    f.AdvisoryURL,
+		},
+	})
+}
+
+// buildFindingExplanation returns a human-readable explanation of a finding,
+// incorporating reachability context into the urgency assessment.
+func buildFindingExplanation(f *models.Finding, pr *pkgremediation.PackageRemediation) string {
+	var b strings.Builder
+
+	b.WriteString(fmt.Sprintf("## %s\n\n", f.Title))
+	b.WriteString(fmt.Sprintf("**Package:** `%s` @ `%s`  \n", f.Package, f.Version))
+	b.WriteString(fmt.Sprintf("**Severity:** %s (CVSS %.1f)  \n", strings.ToUpper(string(f.Severity)), f.CVSS))
+	b.WriteString(fmt.Sprintf("**Reachability:** %s  \n", reachabilityLabel(f.Reachability)))
+	b.WriteString(fmt.Sprintf("**Risk Score:** %.2f  \n", f.RiskScore))
+	b.WriteString(fmt.Sprintf("**Priority:** %s  \n\n", pr.Priority))
+
+	// Description
+	if f.Description != "" {
+		maxLen := 500
+		desc := f.Description
+		if len(desc) > maxLen {
+			desc = desc[:maxLen] + "…"
+		}
+		b.WriteString("### What is the vulnerability?\n\n")
+		b.WriteString(desc + "\n\n")
+	}
+
+	// Reachability context
+	b.WriteString("### Reachability Context\n\n")
+	b.WriteString(reachabilityNote(f.Reachability) + "\n\n")
+
+	// Remediation
+	b.WriteString("### Remediation\n\n")
+	if f.FixedVersion != "" {
+		b.WriteString(fmt.Sprintf("Upgrade `%s` from `%s` → `%s`:\n\n", f.Package, f.Version, f.FixedVersion))
+		b.WriteString(fmt.Sprintf("```bash\n%s\n```\n\n", pr.UpgradeCommand))
+	} else {
+		b.WriteString(fmt.Sprintf("No fixed version is currently available for `%s`. Monitor the advisory for updates.\n\n", f.Package))
+	}
+
+	if f.AdvisoryURL != "" {
+		b.WriteString(fmt.Sprintf("**Advisory:** [%s](%s)\n", f.RuleID, f.AdvisoryURL))
+	}
+
+	return b.String()
+}
+
+// reachabilityLabel returns a short human-readable label for reachability.
+func reachabilityLabel(r models.Reachability) string {
+	switch r {
+	case models.ReachReachable:
+		return "REACHABLE — vulnerable code path is called by production code"
+	case models.ReachUnreachable:
+		return "UNREACHABLE — vulnerable code path is not called in production"
+	default:
+		return "UNKNOWN — reachability could not be determined statically"
+	}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

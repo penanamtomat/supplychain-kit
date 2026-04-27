@@ -194,14 +194,21 @@ func parseGradleContent(content string, result *ManifestResult) {
 }
 
 // extractGradleDep parses a single Gradle dependency line and returns
-// (configuration, artifactId). Returns ("", "") if not a dep line.
+// (configuration, artifactId). Returns ("", "") if not a dep line at all.
+// Returns (config, "") when the line is a known dep line but has no resolvable
+// artifact (version catalog, project dep, etc.).
 //
 // Handles formats:
 //   implementation 'com.google.guava:guava:32.0.0-jre'
 //   implementation("com.google.guava:guava:32.0.0-jre")
-//   testImplementation(libs.junit)     ← version catalog (skip)
-//   api project(':submodule')          ← project dep (skip)
+//   testImplementation(libs.junit)     ← version catalog → (config, "")
+//   api project(':submodule')          ← project dep    → (config, "")
 func extractGradleDep(line string) (config, artifact string) {
+	// Reject comment lines before any other processing.
+	if strings.HasPrefix(line, "//") || strings.HasPrefix(line, "#") {
+		return "", ""
+	}
+
 	// Find the configuration keyword at the start of the line.
 	var configEnd int
 	for i, ch := range line {
@@ -222,17 +229,18 @@ func extractGradleDep(line string) (config, artifact string) {
 	rest = strings.Trim(rest, `'"`)
 	rest = strings.TrimSpace(rest)
 
-	// Skip project(), libs., and non-coordinate strings.
+	// Skip project() and version catalog (libs.) refs — no coordinate to parse.
+	// Return (config, "") so the caller knows this is a dep line, just unresolvable.
 	if strings.HasPrefix(rest, "project(") ||
 		strings.HasPrefix(rest, "libs.") ||
 		!strings.Contains(rest, ":") {
-		return "", ""
+		return config, ""
 	}
 
 	// group:artifact:version — extract artifact (middle segment).
 	parts := strings.SplitN(rest, ":", 3)
 	if len(parts) < 2 || parts[1] == "" {
-		return "", ""
+		return config, ""
 	}
 	return config, parts[1]
 }

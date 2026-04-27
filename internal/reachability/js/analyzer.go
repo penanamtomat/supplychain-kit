@@ -67,7 +67,7 @@ func (a *Analyzer) Analyze(_ context.Context, repoPath string, f *models.Finding
 	}
 
 	// ── Layer 3: Vulnerable Symbol Call Check ─────────────────────────────
-	symbol := extractVulnerableSymbol(f)
+	symbol, isCVESymbol := extractVulnerableSymbol(f)
 	if symbol == "" {
 		// Imported but no symbol to check → honest unknown
 		log.Debug().Str("pkg", pkgName).Msg("js: imported, no CVE symbol resolved → unknown")
@@ -89,7 +89,18 @@ func (a *Analyzer) Analyze(_ context.Context, repoPath string, f *models.Finding
 		}, nil
 	}
 
-	// Imported but the specific vulnerable symbol is not called.
+	// Symbol not found. If symbol came from CVE metadata we trust it and mark
+	// unreachable. If it was only a fallback bare name (weak signal), the package
+	// is imported but we can't confirm the specific call pattern → unknown.
+	if !isCVESymbol {
+		log.Debug().Str("pkg", pkgName).Msg("js: imported, fallback symbol not matched → unknown")
+		return reachability.Result{
+			Status:     models.ReachUnknown,
+			Confidence: 0.4,
+			Evidence:   "package imported; CVE symbol unknown, cannot confirm call",
+		}, nil
+	}
+
 	log.Debug().Str("pkg", pkgName).Str("symbol", symbol).
 		Msg("js: imported but vulnerable symbol not called → unreachable")
 	return reachability.Result{
@@ -145,20 +156,19 @@ func extractPkgName(raw string) string {
 }
 
 // extractVulnerableSymbol tries to derive the affected function name from the
-// finding.  Order of preference:
-//  1. f.Raw["affected_functions"] from Grype/OSV metadata
-//  2. Last path segment of the package name as a last resort (weak signal)
-func extractVulnerableSymbol(f *models.Finding) string {
+// finding. Returns (symbol, isCVESymbol). isCVESymbol is false when only a
+// weak fallback (bare package name) was available.
+func extractVulnerableSymbol(f *models.Finding) (string, bool) {
 	if f.Raw != nil {
 		// Grype populates affected function info under various keys.
 		for _, key := range []string{"affected_functions", "affectedFunctions", "vulnerability_function"} {
 			if v, ok := f.Raw[key]; ok {
 				if s, ok := v.(string); ok && s != "" {
-					return sanitizeSymbol(s)
+					return sanitizeSymbol(s), true
 				}
 				if arr, ok := v.([]interface{}); ok && len(arr) > 0 {
 					if s, ok := arr[0].(string); ok && s != "" {
-						return sanitizeSymbol(s)
+						return sanitizeSymbol(s), true
 					}
 				}
 			}
@@ -168,10 +178,10 @@ func extractVulnerableSymbol(f *models.Finding) string {
 	// This catches patterns like `multer(` or `tar.extract(`.
 	pkg := extractPkgName(f.Package)
 	if pkg == "" {
-		return ""
+		return "", false
 	}
 	// For scoped packages, use just the package part: @aws-sdk/client-s3 → client-s3
-	return barePackageName(normPkg(pkg))
+	return barePackageName(normPkg(pkg)), false
 }
 
 // sanitizeSymbol strips module path prefixes like "lodash.merge" → "merge".

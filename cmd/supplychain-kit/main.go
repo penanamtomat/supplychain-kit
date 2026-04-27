@@ -40,6 +40,7 @@ import (
 	"github.com/penanamtomat/supplychain-kit/internal/scoring"
 	"github.com/penanamtomat/supplychain-kit/internal/taint"
 	reachgoanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/golang"
+	reachjavaanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/java"
 	reachjsanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/js"
 	reachpyanalyzer "github.com/penanamtomat/supplychain-kit/internal/reachability/python"
 )
@@ -194,7 +195,7 @@ Target:
 			if artifacts != nil {
 				cpgPath = artifacts[joern.ArtifactCPGPath]
 			}
-			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer(), reachgoanalyzer.NewAnalyzer())
+			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer(), reachgoanalyzer.NewAnalyzer(), reachjavaanalyzer.NewAnalyzer())
 			if err := reach.Analyze(cmd.Context(), asset.ID, repo, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
 			}
@@ -841,7 +842,7 @@ Examples:
 			if artifacts != nil {
 				cpgPath = artifacts[joern.ArtifactCPGPath]
 			}
-			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer(), reachgoanalyzer.NewAnalyzer())
+			reach := reachability.New(reachjsanalyzer.NewAnalyzer(), reachpyanalyzer.NewAnalyzer(), reachgoanalyzer.NewAnalyzer(), reachjavaanalyzer.NewAnalyzer())
 			if err := reach.Analyze(cmd.Context(), asset.ID, repo, merged); err != nil {
 				fmt.Fprintf(os.Stderr, "warn: reachability analysis failed: %v\n", err)
 			}

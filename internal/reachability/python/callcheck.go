@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // CallResult describes whether a vulnerable symbol is called in production code.
@@ -15,27 +16,46 @@ type CallResult struct {
 	Evidence string // "file.py:42"
 }
 
+// regexCache caches compiled alias-detection regexes keyed by normalised package name.
+var (
+	regexCacheMu sync.Mutex
+	regexCache   = map[string][2]*regexp.Regexp{}
+)
+
+func aliasRegexes(pkgName string) (reImportAs, reFromImport *regexp.Regexp) {
+	bare := bareModule(normPkg(pkgName))
+	regexCacheMu.Lock()
+	if pair, ok := regexCache[bare]; ok {
+		regexCacheMu.Unlock()
+		return pair[0], pair[1]
+	}
+	regexCacheMu.Unlock()
+
+	q := regexp.QuoteMeta(bare)
+	ri := regexp.MustCompile(`^\s*import\s+` + q + `(?:\s+as\s+(\w+))?`)
+	rf := regexp.MustCompile(`^\s*from\s+` + q + `\s+import\s+(.+)`)
+
+	regexCacheMu.Lock()
+	regexCache[bare] = [2]*regexp.Regexp{ri, rf}
+	regexCacheMu.Unlock()
+	return ri, rf
+}
+
 // CheckSymbolCall scans sourceFiles for calls to vulnerableSymbol from pkgName.
-//
-// Strategy:
-//  1. Find the local alias used when importing pkgName in each file.
-//  2. Look for `alias.symbol(` or `from pkg import symbol` + bare `symbol(`.
+// Each file is opened exactly once: aliases are detected and call patterns are
+// checked in a single pass, avoiding the previous two-pass / regex-recompile overhead.
 func CheckSymbolCall(repoPath, pkgName, vulnerableSymbol string, sourceFiles []string) CallResult {
 	if vulnerableSymbol == "" {
 		return CallResult{}
 	}
 
+	reImportAs, reFromImport := aliasRegexes(pkgName)
+	bare := bareModule(normPkg(pkgName))
+	symQ := regexp.QuoteMeta(vulnerableSymbol)
+
 	for _, relFile := range sourceFiles {
 		absFile := filepath.Join(repoPath, filepath.FromSlash(relFile))
-
-		aliases := findImportAliases(absFile, pkgName)
-		if len(aliases) == 0 {
-			// Fallback: use the package base name as alias.
-			aliases = []string{bareModule(normPkg(pkgName))}
-		}
-
-		evidence, found := scanFileForCall(absFile, aliases, vulnerableSymbol)
-		if found {
+		if evidence, found := scanFileSinglePass(absFile, bare, reImportAs, reFromImport, vulnerableSymbol, symQ); found {
 			return CallResult{Called: true, Evidence: fmt.Sprintf("%s:%s", relFile, evidence)}
 		}
 	}
@@ -43,28 +63,18 @@ func CheckSymbolCall(repoPath, pkgName, vulnerableSymbol string, sourceFiles []s
 	return CallResult{}
 }
 
-// findImportAliases returns all local names under which pkgName is available:
-//
-//	import pkg           → ["pkg"]
-//	import pkg as alias  → ["alias"]
-//	from pkg import sym  → ["sym"] (symbol itself is directly bound)
-//	from pkg import sym as s → ["s"]
-func findImportAliases(filePath, pkgName string) []string {
+// scanFileSinglePass reads a file once, collecting import aliases in the first
+// section of the file and checking for symbol calls throughout.
+func scanFileSinglePass(filePath, bare string, reImportAs, reFromImport *regexp.Regexp, symbol, symQ string) (string, bool) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return nil
+		return "", false
 	}
 	defer f.Close()
 
-	bare := bareModule(normPkg(pkgName))
-	quotedBare := regexp.QuoteMeta(bare)
-
-	// import pkg  or  import pkg as alias
-	reImportAs := regexp.MustCompile(`^\s*import\s+` + quotedBare + `(?:\s+as\s+(\w+))?`)
-	// from pkg import sym [as alias]
-	reFromImport := regexp.MustCompile(`^\s*from\s+` + quotedBare + `\s+import\s+(.+)`)
-
-	var aliases []string
+	// Collect aliases and lines in one read.
+	var lines []string
+	aliases := []string{}
 	seen := make(map[string]bool)
 	add := func(s string) {
 		s = strings.TrimSpace(s)
@@ -77,17 +87,16 @@ func findImportAliases(filePath, pkgName string) []string {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
+		lines = append(lines, line)
 
 		if m := reImportAs.FindStringSubmatch(line); len(m) > 0 {
 			if len(m) > 1 && m[1] != "" {
-				add(m[1]) // aliased: import pkg as alias
+				add(m[1])
 			} else {
-				add(bare) // plain: import pkg
+				add(bare)
 			}
 		}
-
 		if m := reFromImport.FindStringSubmatch(line); len(m) > 1 {
-			// Parse: sym1, sym2, sym1 as s1 ...
 			for _, part := range strings.Split(m[1], ",") {
 				part = strings.TrimSpace(part)
 				if asParts := strings.Fields(part); len(asParts) == 3 && strings.EqualFold(asParts[1], "as") {
@@ -99,31 +108,21 @@ func findImportAliases(filePath, pkgName string) []string {
 		}
 	}
 
-	return aliases
-}
-
-// scanFileForCall looks for calls using any of the given aliases.
-func scanFileForCall(filePath string, aliases []string, symbol string) (string, bool) {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return "", false
+	if len(aliases) == 0 {
+		aliases = []string{bare}
 	}
-	defer f.Close()
 
-	patterns := buildCallPatterns(aliases, symbol)
+	// Build call patterns once per file (aliases now known).
+	patterns := buildCallPatterns(aliases, symbol, symQ)
 
-	lineNo := 0
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		lineNo++
-		line := scanner.Text()
+	for lineNo, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 		for _, pat := range patterns {
 			if pat.MatchString(line) {
-				return fmt.Sprintf("%d", lineNo), true
+				return fmt.Sprintf("%d", lineNo+1), true
 			}
 		}
 	}
@@ -131,21 +130,14 @@ func scanFileForCall(filePath string, aliases []string, symbol string) (string, 
 	return "", false
 }
 
-func buildCallPatterns(aliases []string, symbol string) []*regexp.Regexp {
-	s := regexp.QuoteMeta(symbol)
+func buildCallPatterns(aliases []string, symbol, symQ string) []*regexp.Regexp {
 	var pats []*regexp.Regexp
-
 	for _, alias := range aliases {
 		a := regexp.QuoteMeta(alias)
-		// alias.symbol(
-		pats = append(pats, regexp.MustCompile(`\b`+a+`\s*\.\s*`+s+`\s*\(`))
-		// alias(  — package itself is callable
+		pats = append(pats, regexp.MustCompile(`\b`+a+`\s*\.\s*`+symQ+`\s*\(`))
 		pats = append(pats, regexp.MustCompile(`\b`+a+`\s*\(`))
 	}
-
-	// Bare symbol call (when imported directly: from pkg import symbol)
-	pats = append(pats, regexp.MustCompile(`\b`+s+`\s*\(`))
-
+	pats = append(pats, regexp.MustCompile(`\b`+symQ+`\s*\(`))
 	return pats
 }
 

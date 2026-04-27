@@ -146,6 +146,23 @@ func detectEcosystem(f *models.Finding) string {
 	if strings.HasPrefix(pkg, "pkg:cargo") {
 		return "cargo"
 	}
+	// Heuristic for bare package names (non-purl findings from trivy/grype):
+	// infer ecosystem from the manifest file that trivy found the vulnerability in.
+	fp := strings.ToLower(filepath.Base(f.FilePath))
+	switch fp {
+	case "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml":
+		return "npm"
+	case "requirements.txt", "pipfile", "pipfile.lock", "pyproject.toml", "setup.py", "setup.cfg", "poetry.lock":
+		return "pypi"
+	case "go.mod", "go.sum":
+		return "golang"
+	case "pom.xml", "build.gradle", "build.gradle.kts", "gradle.lockfile":
+		return "maven"
+	case "cargo.toml", "cargo.lock":
+		return "cargo"
+	case "gemfile", "gemfile.lock":
+		return "rubygems"
+	}
 	// Heuristic for bare package names (non-purl findings from grype).
 	if strings.Contains(pkg, "github.com") || strings.Contains(pkg, "golang.org") || strings.Contains(pkg, "go.uber.org") {
 		return "golang"

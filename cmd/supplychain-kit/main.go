@@ -1057,35 +1057,159 @@ func engageListCmd() *cobra.Command {
 func engageStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status <engagement>",
-		Short: "Show details of a specific engagement",
-		Args:  cobra.ExactArgs(1),
+		Short: "Show pipeline progress and finding summary for an engagement",
+		Long: `Show the current pipeline status of an engagement by reading state.json.
+Displays phase progress (Init → SBOM → Scan → Gate → Report), timestamps,
+and finding counts by severity when findings.json is available.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			dir := filepath.Join("results", name)
-			s := readEngagementSummary(filepath.Join(dir, "summary.json"))
-			if s.Timestamp == "" {
+
+			// Primary: read state.json written by init_engagement / run pipeline.
+			state, stateErr := readEngagementState(filepath.Join(dir, "state.json"))
+
+			// Fallback: summary.json written by older `run` command.
+			legacy := readEngagementSummary(filepath.Join(dir, "summary.json"))
+
+			if stateErr != nil && legacy.Timestamp == "" {
 				return fmt.Errorf("engagement %q not found\nRun: supplychain-kit run %s --repo <url-or-path>", name, name)
 			}
 
-			fmt.Printf("Engagement : %s\n", name)
-			fmt.Printf("Repository : %s\n", s.Repo)
-			fmt.Printf("Mode       : %s\n", s.Mode)
-			fmt.Printf("Date       : %s\n", s.Timestamp)
-			fmt.Printf("Total      : %d findings\n", s.Total)
-			for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"} {
-				if n := s.Severity[sev]; n > 0 {
-					fmt.Printf("  %-10s: %d\n", sev, n)
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+
+			fmt.Fprintf(w, "Engagement\t: %s\n", name)
+
+			repo := state.Repo
+			if repo == "" {
+				repo = legacy.Repo
+			}
+			if repo != "" {
+				fmt.Fprintf(w, "Repository\t: %s\n", repo)
+			}
+
+			mode := state.Mode
+			if mode == "" {
+				mode = legacy.Mode
+			}
+			if mode != "" {
+				fmt.Fprintf(w, "Mode\t: %s\n", mode)
+			}
+
+			if state.CreatedAt != "" {
+				fmt.Fprintf(w, "Created\t: %s\n", state.CreatedAt)
+			} else if legacy.Timestamp != "" {
+				fmt.Fprintf(w, "Date\t: %s\n", legacy.Timestamp)
+			}
+
+			// Pipeline phase progress.
+			fmt.Fprintln(w, "\nPhase Progress:")
+			phases := []string{"init", "sbom", "scan", "gate", "report"}
+			phaseDisplay := map[string]string{
+				"init":   "Init",
+				"sbom":   "SBOM",
+				"scan":   "Scan",
+				"gate":   "Gate",
+				"report": "Report",
+			}
+			for _, ph := range phases {
+				status := "pending"
+				if s, ok := state.Phases[ph]; ok {
+					status = s
+				}
+				icon := phaseIcon(status)
+				fmt.Fprintf(w, "  %s  %-8s\t%s\n", icon, phaseDisplay[ph], status)
+			}
+
+			// Finding counts from findings.json (most authoritative).
+			counts := readFindingCounts(filepath.Join(dir, "findings.json"))
+			if counts == nil && legacy.Total > 0 {
+				counts = legacy.Severity
+			}
+			if counts != nil {
+				total := 0
+				for _, n := range counts {
+					total += n
+				}
+				fmt.Fprintf(w, "\nFindings\t: %d total\n", total)
+				for _, sev := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"} {
+					if n := counts[sev]; n > 0 {
+						fmt.Fprintf(w, "  %-10s\t: %d\n", sev, n)
+					}
 				}
 			}
-			fmt.Printf("\nFiles:\n")
-			for _, fname := range []string{"report.md", "findings.json", "findings.txt", "summary.json"} {
-				p := filepath.Join(dir, fname)
+
+			// Output files.
+			fmt.Fprintln(w, "\nArtifacts:")
+			checkPaths := []string{
+				filepath.Join(dir, "findings.json"),
+				filepath.Join(dir, "findings", "findings.json"),
+				filepath.Join(dir, "reports", "report.md"),
+				filepath.Join(dir, "reports", "report.docx"),
+				filepath.Join(dir, "sbom", "sbom.json"),
+				filepath.Join(dir, "state.json"),
+			}
+			for _, p := range checkPaths {
 				if _, err := os.Stat(p); err == nil {
-					fmt.Printf("  ✓ %s\n", p)
+					fmt.Fprintf(w, "  ✓  %s\n", p)
 				}
 			}
-			return nil
+
+			return w.Flush()
 		},
+	}
+}
+
+// EngagementState mirrors the state.json structure written by init_engagement and run.
+type EngagementState struct {
+	Engagement string            `json:"engagement"`
+	Repo       string            `json:"repo"`
+	Policy     string            `json:"policy"`
+	Mode       string            `json:"mode"`
+	OutputDir  string            `json:"output_dir"`
+	CreatedAt  string            `json:"created_at"`
+	Phases     map[string]string `json:"phases"`
+}
+
+func readEngagementState(path string) (EngagementState, error) {
+	var s EngagementState
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return s, err
+	}
+	return s, json.Unmarshal(raw, &s)
+}
+
+// readFindingCounts reads findings.json and returns severity counts.
+// Returns nil if file is missing or unreadable.
+func readFindingCounts(path string) map[string]int {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var findings []struct {
+		Severity string `json:"severity"`
+	}
+	if err := json.Unmarshal(raw, &findings); err != nil {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, f := range findings {
+		counts[strings.ToUpper(f.Severity)]++
+	}
+	return counts
+}
+
+func phaseIcon(status string) string {
+	switch status {
+	case "done":
+		return "✓"
+	case "failed":
+		return "✗"
+	case "skipped":
+		return "–"
+	default:
+		return "○"
 	}
 }
 
